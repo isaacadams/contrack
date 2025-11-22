@@ -2,10 +2,10 @@
 name = "contrack"
 version = "0.1.0"
 edition = "2021"
-authors = ["Your Name <your.email@example.com>"]
+authors = ["Isaac Adams <26559009+isaacadams@users.noreply.github.com>"]
 description = "A CLI tool for tracking and documenting code contributions across repositories"
 license = "MIT OR Apache-2.0"
-repository = "https://github.com/yourusername/contrack"
+repository = "https://github.com/isaacadams/contrack"
 readme = "README.md"
 
 [[bin]]
