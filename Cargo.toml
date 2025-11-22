@@ -7,6 +7,8 @@ description = "A CLI tool for tracking and documenting code contributions across
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/isaacadams/contrack"
 readme = "README.md"
+keywords = ["cli", "git", "contributions", "documentation", "tracking", "ai", "markdown"]
+categories = ["command-line-utilities", "development-tools", "utilities"]
 
 [[bin]]
 name = "contrack"
