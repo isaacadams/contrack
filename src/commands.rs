@@ -27,6 +27,7 @@ pub fn init_command(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn add_command(
     repo_url: String,
     name: String,

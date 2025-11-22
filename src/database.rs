@@ -1,7 +1,6 @@
 use anyhow::{Context, Result};
 use chrono::Utc;
 use rusqlite::{params, Connection};
-use serde_json;
 use std::collections::HashMap;
 
 use crate::utils::get_database_path;
