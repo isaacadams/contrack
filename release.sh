@@ -15,9 +15,17 @@ fi
 
 VERSION=$(grep -E '^\s*version\s*=' Cargo.toml | head -1 | sed 's/.*"\([^"]*\)".*/\1/')
 
-if [ -z "$VERSION" ] || [ "$VERSION" = "version" ] || [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-    echo -e "${RED}Error: Could not extract valid version from Cargo.toml${NC}"
+# Enforce strict semantic versioning (MAJOR.MINOR.PATCH format)
+if [ -z "$VERSION" ] || [ "$VERSION" = "version" ]; then
+    echo -e "${RED}Error: Could not extract version from Cargo.toml${NC}"
     echo -e "${RED}Found: '${VERSION}'${NC}"
+    exit 1
+fi
+
+if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+    echo -e "${RED}Error: Invalid semantic version format${NC}"
+    echo -e "${RED}Found: '${VERSION}'${NC}"
+    echo -e "${RED}Version must follow semantic versioning: MAJOR.MINOR.PATCH (e.g., 1.2.3)${NC}"
     exit 1
 fi
 
@@ -42,14 +50,14 @@ if git ls-remote --tags origin "$TAG_NAME" | grep -q "$TAG_NAME"; then
 fi
 
 # Get all version tags and find the most recent one
-# This handles tags in format v*.*.* or *.*.* (with or without v prefix) and sorts them by version
-LATEST_TAG=$(git tag -l | grep -E '^(v)?[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -1)
+# Only look for tags with 'v' prefix and strict semantic versioning format
+LATEST_TAG=$(git tag -l 'v*' | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -1)
 
 if [ -z "$LATEST_TAG" ]; then
     echo -e "${YELLOW}No previous release tags found. This appears to be the first release.${NC}"
     LATEST_VERSION="none"
 else
-    # Extract version number from tag (remove 'v' prefix if present)
+    # Extract version number from tag (remove 'v' prefix)
     LATEST_VERSION=$(echo "$LATEST_TAG" | sed 's/^v//')
     echo -e "${GREEN}Most recent release tag: ${LATEST_TAG}${NC}"
     

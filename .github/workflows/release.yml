@@ -1,14 +1,12 @@
 name: release
 
-permissions: write-all
-
 permissions:
   contents: write
 
 on:
   push:
     tags:
-      - '[0-9]+.[0-9]+.[0-9]+'
+      - 'v[0-9]*.[0-9]*.[0-9]*'
 
 env:
   CARGO_TERM_COLOR: always
@@ -49,7 +47,7 @@ jobs:
           files: |
             ./**/*.zip
             ./**/*.tar.gz
-          token: ${{ secrets.GITHUB_TOKEN }}
           generate_release_notes: true
+          token: ${{ secrets.GITHUB_TOKEN }}
           name: ${{ env.RELEASE_VERSION }}
           tag_name: ${{ env.RELEASE_VERSION }}
