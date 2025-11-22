@@ -1,7 +1,6 @@
 use anyhow::{Context, Result};
 use chrono::Utc;
-use rusqlite::{params, Connection, Row};
-use serde_json;
+use rusqlite::{params, Connection};
 use std::collections::HashMap;
 
 use crate::utils::get_database_path;
@@ -425,6 +424,7 @@ impl Database {
         Ok(repos)
     }
 
+    #[allow(dead_code)]
     pub fn get_contribution_id(&self, repo_url: &str, name: &str) -> Result<Option<i64>> {
         let result: Result<i64, _> = self.conn.query_row(
             "SELECT id FROM contributions WHERE repository_url = ?1 AND name = ?2",
