@@ -22,10 +22,9 @@ serde_json = "1.0"
 directories = "5.0"
 anyhow = "1.0"
 chrono = "0.4"
-git2 = "0.18"
+git2 = { version = "0.18", features = ["vendored-libgit2", "vendored-openssl"] }
 colored = "2.0"
 toml = "0.8"
 
 [dev-dependencies]
 tempfile = "3.8"
-

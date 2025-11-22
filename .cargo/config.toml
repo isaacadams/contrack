@@ -1,7 +1,0 @@
-# Use bfd linker for Linux targets to avoid OpenSSL/GLIBC version conflicts
-# This is only needed for Linux (particularly WSL with linuxbrew)
-[target.x86_64-unknown-linux-gnu]
-rustflags = ["-C", "link-arg=-fuse-ld=bfd"]
-
-[target.aarch64-unknown-linux-gnu]
-rustflags = ["-C", "link-arg=-fuse-ld=bfd"]
