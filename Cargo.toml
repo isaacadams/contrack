@@ -1,6 +1,6 @@
 [package]
 name = "contrack"
-version = "0.0.5"
+version = "0.0.1"
 edition = "2021"
 authors = ["Isaac Adams <26559009+isaacadams@users.noreply.github.com>"]
 description = "A CLI tool for tracking and documenting code contributions across repositories"
