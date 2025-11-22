@@ -13,15 +13,40 @@ pub fn init_command(
     name: String,
     description: Option<String>,
 ) -> Result<()> {
+    use crate::config::{Config, RepositoryConfig};
+    use crate::utils::get_config_path;
+
     let db = Database::open()?;
     let repo = Repository {
         url: repo_url.clone(),
-        organization: org,
-        name,
-        description,
+        organization: org.clone(),
+        name: name.clone(),
+        description: description.clone(),
     };
 
     db.add_repository(&repo)?;
+    
+    // Auto-sync to config.toml if it exists or create it
+    let config_path = get_config_path()?;
+    let mut config = if config_path.exists() {
+        Config::from_toml(&config_path)?
+    } else {
+        Config::new()
+    };
+    
+    // Add repository to config
+    config.repositories.insert(
+        repo_url.clone(),
+        RepositoryConfig {
+            organization: org,
+            name,
+            description,
+        },
+    );
+    
+    // Save config
+    config.to_toml(&config_path)?;
+    
     println!("{} Repository initialized successfully!", "✓".green());
     println!("  URL: {}", repo.url);
     Ok(())
@@ -296,5 +321,334 @@ pub fn list_repositories(detailed: bool) -> Result<()> {
     }
 
     Ok(())
+}
+
+pub fn locations_command() -> Result<()> {
+    use crate::utils::{get_contrack_dir, get_database_path};
+    use directories::ProjectDirs;
+
+    println!("\n{} Contrack Database Locations", "📍".blue());
+    println!("{}", "=".repeat(80));
+
+    // Get current database path (this will be the active one)
+    let current_db_path = get_database_path()?;
+    let is_project_local = get_contrack_dir().is_some();
+
+    // Display current location
+    println!("\n{} Current Database (Active)", "•".green());
+    if is_project_local {
+        println!("  Type: {}", "Project-Local".bold().green());
+        if let Some(contrack_dir) = get_contrack_dir() {
+            println!("  Directory: {}", contrack_dir.display());
+        }
+    } else {
+        println!("  Type: {}", "Global".bold().yellow());
+        let project_dirs = ProjectDirs::from("com", "contrack", "contrack")
+            .context("Failed to determine application data directory")?;
+        println!("  Directory: {}", project_dirs.data_dir().display());
+    }
+    println!("  Database: {}", current_db_path.display());
+    println!("  Exists: {}", if current_db_path.exists() { "Yes".green() } else { "No".red() });
+
+    // Show project-local location if different from current
+    if let Some(contrack_dir) = get_contrack_dir() {
+        let project_db = contrack_dir.join("contributions.db");
+        if project_db != current_db_path {
+            println!("\n{} Project-Local Location", "•".blue());
+            println!("  Type: {}", "Project-Local".bold().green());
+            println!("  Directory: {}", contrack_dir.display());
+            println!("  Database: {}", project_db.display());
+            println!("  Exists: {}", if project_db.exists() { "Yes".green() } else { "No".red() });
+        }
+    }
+
+    // Show global location
+    let project_dirs = ProjectDirs::from("com", "contrack", "contrack")
+        .context("Failed to determine application data directory")?;
+    let global_db = project_dirs.data_dir().join("contributions.db");
+    
+    if global_db != current_db_path {
+        println!("\n{} Global Location", "•".blue());
+        println!("  Type: {}", "Global".bold().yellow());
+        println!("  Directory: {}", project_dirs.data_dir().display());
+        println!("  Database: {}", global_db.display());
+        println!("  Exists: {}", if global_db.exists() { "Yes".green() } else { "No".red() });
+    }
+
+    println!();
+    Ok(())
+}
+
+#[cfg(test)]
+mod locations_tests {
+    use super::*;
+
+    #[test]
+    fn test_locations_command() {
+        // Test that the command doesn't panic and returns Ok
+        let result = locations_command();
+        assert!(result.is_ok());
+    }
+}
+
+pub fn config_sync_command() -> Result<()> {
+    use crate::utils::get_config_path;
+
+    let db = Database::open()?;
+    let config = db.load_config_from_db()?;
+    let config_path = get_config_path()?;
+    
+    config.to_toml(&config_path)?;
+    println!("{} Configuration synced to: {}", "✓".green(), config_path.display());
+    Ok(())
+}
+
+pub fn config_load_command() -> Result<()> {
+    use crate::config::Config;
+    use crate::utils::get_config_path;
+
+    let config_path = get_config_path()?;
+    
+    if !config_path.exists() {
+        return Err(anyhow::anyhow!("Config file not found: {:?}", config_path));
+    }
+    
+    let config = Config::from_toml(&config_path)?;
+    let db = Database::open()?;
+    db.load_config_to_db(&config)?;
+    
+    println!("{} Configuration loaded from: {}", "✓".green(), config_path.display());
+    Ok(())
+}
+
+pub fn config_add_org_command(id: String, name: String, description: Option<String>) -> Result<()> {
+    use crate::config::{Config, Organization};
+    use crate::utils::get_config_path;
+
+    let config_path = get_config_path()?;
+    let mut config = if config_path.exists() {
+        Config::from_toml(&config_path)?
+    } else {
+        Config::new()
+    };
+    
+    // Add organization to config
+    config.organizations.insert(
+        id.clone(),
+        Organization {
+            name,
+            description,
+        },
+    );
+    
+    // Save config
+    config.to_toml(&config_path)?;
+    
+    // Also update database
+    let db = Database::open()?;
+    db.load_config_to_db(&config)?;
+    
+    println!("{} Organization '{}' added", "✓".green(), id);
+    Ok(())
+}
+
+pub fn config_add_repo_command(url: String, org: String, name: String, description: Option<String>) -> Result<()> {
+    use crate::config::{Config, RepositoryConfig};
+    use crate::database::Repository;
+    use crate::utils::get_config_path;
+
+    let config_path = get_config_path()?;
+    let mut config = if config_path.exists() {
+        Config::from_toml(&config_path)?
+    } else {
+        Config::new()
+    };
+    
+    // Add repository to config
+    config.repositories.insert(
+        url.clone(),
+        RepositoryConfig {
+            organization: org.clone(),
+            name: name.clone(),
+            description: description.clone(),
+        },
+    );
+    
+    // Save config
+    config.to_toml(&config_path)?;
+    
+    // Also update database
+    let db = Database::open()?;
+    let repo = Repository {
+        url,
+        organization: org,
+        name,
+        description,
+    };
+    db.add_repository(&repo)?;
+    
+    println!("{} Repository added", "✓".green());
+    Ok(())
+}
+
+pub fn loadout_list_command() -> Result<()> {
+    let db = Database::open()?;
+    let loadouts = db.list_loadouts()?;
+
+    if loadouts.is_empty() {
+        println!("No loadouts found");
+        return Ok(());
+    }
+
+    println!("\n{} Loadouts", "📦".blue());
+    println!("{}", "=".repeat(80));
+
+    for (id, name, is_default) in loadouts {
+        let default_marker = if is_default { " (default)" } else { "" };
+        println!("\n{} {} [ID: {}]{}", "•".green(), name.bold(), id, default_marker);
+    }
+
+    println!();
+    Ok(())
+}
+
+pub fn loadout_create_command(name: String) -> Result<()> {
+    let db = Database::open()?;
+    
+    // Check if loadout already exists
+    if db.get_loadout_id(&name)?.is_some() {
+        return Err(anyhow::anyhow!("Loadout '{}' already exists", name));
+    }
+    
+    db.create_loadout(&name)?;
+    println!("{} Loadout '{}' created", "✓".green(), name);
+    Ok(())
+}
+
+pub fn loadout_load_command(name: String) -> Result<()> {
+    let db = Database::open()?;
+    db.load_loadout(&name)?;
+    println!("{} Loadout '{}' loaded", "✓".green(), name);
+    Ok(())
+}
+
+pub fn loadout_save_command(name: String) -> Result<()> {
+    let db = Database::open()?;
+    
+    // Create loadout if it doesn't exist
+    if db.get_loadout_id(&name)?.is_none() {
+        db.create_loadout(&name)?;
+    }
+    
+    db.save_current_to_loadout(&name)?;
+    println!("{} Current prompts and rules saved to loadout '{}'", "✓".green(), name);
+    Ok(())
+}
+
+pub fn loadout_delete_command(name: String) -> Result<()> {
+    let db = Database::open()?;
+    db.delete_loadout(&name)?;
+    println!("{} Loadout '{}' deleted", "✓".green(), name);
+    Ok(())
+}
+
+pub fn loadout_reload_default_command() -> Result<()> {
+    let db = Database::open()?;
+    db.reload_default_loadout()?;
+    println!("{} Default loadout reloaded", "✓".green());
+    Ok(())
+}
+
+pub fn ai_command() -> Result<()> {
+    let db = Database::open()?;
+    
+    // Introduction
+    println!("Contrack - Contribution Tracking Tool for AI Agents");
+    println!("==================================================\n");
+    println!("Contrack is a CLI tool designed to help AI agents track and document code contributions across repositories.");
+    println!("It maintains a SQLite database of repositories, contributions, commits, agent rules, and prompts.\n");
+    
+    // Instructions
+    println!("HOW TO USE THIS TOOL:");
+    println!("---------------------");
+    println!("1. Review the agent rules below to understand how to work with the contributions database");
+    println!("2. Review the available prompts to see what tasks you can help with");
+    println!("3. Ask the user which prompt they would like to execute");
+    println!("4. Use the contrack CLI commands to interact with the database");
+    println!("5. Always maintain consistency with existing data patterns\n");
+    
+    // Commands list
+    println!("AVAILABLE COMMANDS:");
+    println!("-------------------");
+    println!("  contrack init          - Initialize a new repository");
+    println!("  contrack add           - Add a new contribution");
+    println!("  contrack update        - Update commit details from git");
+    println!("  contrack generate      - Generate contributions markdown file");
+    println!("  contrack query         - Query the database (contributions, commits, stats)");
+    println!("  contrack list          - List repositories");
+    println!("  contrack locations     - List all database locations");
+    println!("  contrack config        - Manage configuration file");
+    println!("  contrack loadout       - Manage prompt and rule loadouts");
+    println!("  contrack ai            - Show this AI configuration prompt\n");
+    
+    // Agent rules
+    println!("AGENT RULES:");
+    println!("------------");
+    let rules = db.get_all_agent_rules()?;
+    if rules.is_empty() {
+        println!("No agent rules found in database.\n");
+    } else {
+        for (i, (name, instruction, priority, category)) in rules.iter().enumerate() {
+            println!("\n{}. {} [Priority: {}, Category: {}]", 
+                i + 1, 
+                name, 
+                priority,
+                category.as_deref().unwrap_or("Uncategorized")
+            );
+            println!("   {}", instruction.replace('\n', "\n   "));
+        }
+        println!();
+    }
+    
+    // Available prompts
+    println!("AVAILABLE PROMPTS:");
+    println!("------------------");
+    let prompts = db.get_all_prompts()?;
+    if prompts.is_empty() {
+        println!("No prompts found in database.\n");
+    } else {
+        for (i, (name, prompt_text, description, category)) in prompts.iter().enumerate() {
+            println!("\n{}. {} [Category: {}]", 
+                i + 1, 
+                name,
+                category.as_deref().unwrap_or("Uncategorized")
+            );
+            if let Some(desc) = description {
+                println!("   Description: {}", desc);
+            }
+            println!("   Prompt: {}", prompt_text.replace('\n', "\n   "));
+        }
+        println!();
+    }
+    
+    // Final instruction
+    println!("NEXT STEPS:");
+    println!("-----------");
+    println!("Please ask the user which prompt they would like to execute from the list above.");
+    println!("Once they select a prompt, you can help them execute it using the contrack tool.");
+    
+    Ok(())
+}
+
+#[cfg(test)]
+mod ai_tests {
+    use super::*;
+
+    #[test]
+    fn test_ai_command() {
+        // Test that the command doesn't panic and returns Ok
+        let result = ai_command();
+        assert!(result.is_ok());
+    }
 }
 
