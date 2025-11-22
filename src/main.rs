@@ -54,7 +54,7 @@ enum Commands {
         #[arg(short, long)]
         key_commits: String,
         /// Related commit hashes (comma-separated, optional)
-        #[arg(short, long)]
+        #[arg(long)]
         related_commits: Option<String>,
         /// Category (Core Feature, Integration, Infrastructure, etc.)
         #[arg(short, long, default_value = "Feature")]
@@ -161,6 +161,78 @@ fn main() -> Result<()> {
             QueryCommands::Stats => query_stats(),
         },
         Commands::List { detailed } => list_repositories(detailed),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_add_command_parsing() {
+        // Test that add command can parse with both repo_url and related_commits
+        // This ensures there's no short option conflict
+        let args = vec![
+            "contrack",
+            "add",
+            "--repo-url", "https://github.com/test/repo",
+            "--name", "Test Feature",
+            "--overview", "Test overview",
+            "--description", "Test description",
+            "--key-commits", "abc123",
+            "--related-commits", "def456",
+            "--category", "Feature",
+            "--priority", "5",
+        ];
+        
+        let cli = Cli::try_parse_from(args).unwrap();
+        match cli.command {
+            Commands::Add {
+                repo_url,
+                name,
+                overview,
+                description,
+                key_commits,
+                related_commits,
+                category,
+                priority,
+            } => {
+                assert_eq!(repo_url, "https://github.com/test/repo");
+                assert_eq!(name, "Test Feature");
+                assert_eq!(overview, "Test overview");
+                assert_eq!(description, "Test description");
+                assert_eq!(key_commits, "abc123");
+                assert_eq!(related_commits, Some("def456".to_string()));
+                assert_eq!(category, "Feature");
+                assert_eq!(priority, 5);
+            }
+            _ => panic!("Expected Add command"),
+        }
+    }
+
+    #[test]
+    fn test_add_command_with_short_options() {
+        // Test that short option -r works for repo_url
+        let args = vec![
+            "contrack",
+            "add",
+            "-r", "https://github.com/test/repo",
+            "-n", "Test Feature",
+            "-o", "Test overview",
+            "-d", "Test description",
+            "-k", "abc123",
+            "--related-commits", "def456", // Should use long form
+            "-c", "Feature",
+            "-p", "5",
+        ];
+        
+        let cli = Cli::try_parse_from(args).unwrap();
+        match cli.command {
+            Commands::Add { repo_url, .. } => {
+                assert_eq!(repo_url, "https://github.com/test/repo");
+            }
+            _ => panic!("Expected Add command"),
+        }
     }
 }
 
