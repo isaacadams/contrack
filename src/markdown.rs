@@ -1,5 +1,4 @@
 use anyhow::Result;
-use chrono::DateTime;
 use std::collections::HashMap;
 
 use crate::database::{Commit, Contribution};

@@ -3,7 +3,7 @@ use colored::*;
 use std::collections::HashMap;
 use std::path::PathBuf;
 
-use crate::database::{Commit, Contribution, Database, Repository};
+use crate::database::{Contribution, Database, Repository};
 use crate::git;
 use crate::markdown;
 
