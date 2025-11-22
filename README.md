@@ -13,6 +13,16 @@ A CLI tool for tracking and documenting code contributions across repositories. 
 
 ## Installation
 
+### Install from crates.io (Recommended)
+
+If you have Rust installed, you can install Contrack directly from [crates.io](https://crates.io):
+
+```bash
+cargo install contrack
+```
+
+This will install the latest published version to `~/.cargo/bin/contrack` (or `%USERPROFILE%\.cargo\bin\contrack` on Windows). Make sure `~/.cargo/bin` is in your PATH.
+
 ### Download Pre-built Binaries
 
 Download the latest release for your platform from the [Releases](https://github.com/yourusername/contrack/releases) page:
