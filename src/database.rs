@@ -5,6 +5,9 @@ use std::collections::HashMap;
 
 use crate::utils::get_database_path;
 
+type AgentRule = (String, String, i32, Option<String>);
+type PromptInfo = (String, String, Option<String>, Option<String>);
+
 pub struct Database {
     conn: Connection,
 }
@@ -143,6 +146,41 @@ impl Database {
             [],
         )?;
 
+        // Loadouts table
+        self.conn.execute(
+            "CREATE TABLE IF NOT EXISTS loadouts (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL UNIQUE,
+                is_default INTEGER DEFAULT 0,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )",
+            [],
+        )?;
+
+        // Loadout prompts junction table
+        self.conn.execute(
+            "CREATE TABLE IF NOT EXISTS loadout_prompts (
+                loadout_id INTEGER NOT NULL,
+                prompt_id INTEGER NOT NULL,
+                PRIMARY KEY (loadout_id, prompt_id),
+                FOREIGN KEY (loadout_id) REFERENCES loadouts(id) ON DELETE CASCADE,
+                FOREIGN KEY (prompt_id) REFERENCES prompts(id) ON DELETE CASCADE
+            )",
+            [],
+        )?;
+
+        // Loadout rules junction table
+        self.conn.execute(
+            "CREATE TABLE IF NOT EXISTS loadout_rules (
+                loadout_id INTEGER NOT NULL,
+                rule_id INTEGER NOT NULL,
+                PRIMARY KEY (loadout_id, rule_id),
+                FOREIGN KEY (loadout_id) REFERENCES loadouts(id) ON DELETE CASCADE,
+                FOREIGN KEY (rule_id) REFERENCES agent_rules(id) ON DELETE CASCADE
+            )",
+            [],
+        )?;
+
         // Create indexes
         self.conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_contributions_repo ON contributions(repository_url)",
@@ -160,6 +198,9 @@ impl Database {
         // Initialize agent rules if they don't exist
         self.initialize_agent_rules()?;
         self.initialize_prompts()?;
+        
+        // Initialize default loadout
+        self.initialize_default_loadout()?;
 
         Ok(())
     }
@@ -238,6 +279,57 @@ impl Database {
             self.conn.execute(
                 "INSERT INTO prompts (name, prompt_text, description, category, variables) VALUES (?1, ?2, ?3, ?4, ?5)",
                 params![name, prompt_text, description, category, variables],
+            )?;
+        }
+
+        Ok(())
+    }
+
+    fn initialize_default_loadout(&self) -> Result<()> {
+        // Check if default loadout exists
+        let count: i64 = self.conn.query_row(
+            "SELECT COUNT(*) FROM loadouts WHERE is_default = 1",
+            [],
+            |row| row.get(0),
+        )?;
+
+        if count > 0 {
+            return Ok(()); // Default loadout already exists
+        }
+
+        // Create default loadout
+        self.conn.execute(
+            "INSERT INTO loadouts (name, is_default) VALUES ('default', 1)",
+            [],
+        )?;
+
+        let loadout_id: i64 = self.conn.last_insert_rowid();
+
+        // Associate all existing prompts with default loadout
+        let mut stmt = self.conn.prepare("SELECT id FROM prompts")?;
+        let prompt_rows = stmt.query_map([], |row| {
+            row.get::<_, i64>(0)
+        })?;
+
+        for prompt_row in prompt_rows {
+            let prompt_id = prompt_row?;
+            self.conn.execute(
+                "INSERT OR IGNORE INTO loadout_prompts (loadout_id, prompt_id) VALUES (?1, ?2)",
+                params![loadout_id, prompt_id],
+            )?;
+        }
+
+        // Associate all existing rules with default loadout
+        let mut stmt = self.conn.prepare("SELECT id FROM agent_rules")?;
+        let rule_rows = stmt.query_map([], |row| {
+            row.get::<_, i64>(0)
+        })?;
+
+        for rule_row in rule_rows {
+            let rule_id = rule_row?;
+            self.conn.execute(
+                "INSERT OR IGNORE INTO loadout_rules (loadout_id, rule_id) VALUES (?1, ?2)",
+                params![loadout_id, rule_id],
             )?;
         }
 
@@ -454,6 +546,307 @@ impl Database {
             self.conn.query_row("SELECT COUNT(*) FROM prompts", [], |row| row.get(0))?);
 
         Ok(stats)
+    }
+
+    /// Get all unique organizations from repositories
+    #[allow(dead_code)]
+    pub fn get_all_organizations(&self) -> Result<Vec<(String, Option<String>)>> {
+        let repos = self.get_all_repositories()?;
+        let mut orgs: std::collections::HashMap<String, Option<String>> = std::collections::HashMap::new();
+        
+        for repo in repos {
+            // Use organization name as key, description as value if available
+            orgs.entry(repo.organization.clone())
+                .or_insert_with(|| repo.description.clone());
+        }
+        
+        Ok(orgs.into_iter().collect())
+    }
+
+    /// Load config from database (for syncing to TOML)
+    pub fn load_config_from_db(&self) -> Result<crate::config::Config> {
+        use crate::config::{Config, Organization, RepositoryConfig};
+        use std::collections::HashMap;
+
+        let mut config = Config::new();
+        
+        // Get all repositories
+        let repos = self.get_all_repositories()?;
+        
+        // Build organizations map
+        let mut orgs: HashMap<String, Option<String>> = HashMap::new();
+        for repo in &repos {
+            orgs.entry(repo.organization.clone())
+                .or_insert_with(|| repo.description.clone());
+        }
+        
+        // Convert to config format
+        for (org_name, description) in orgs {
+            config.organizations.insert(
+                org_name.clone(),
+                Organization {
+                    name: org_name,
+                    description,
+                },
+            );
+        }
+        
+        // Add repositories
+        for repo in repos {
+            config.repositories.insert(
+                repo.url.clone(),
+                RepositoryConfig {
+                    organization: repo.organization,
+                    name: repo.name,
+                    description: repo.description,
+                },
+            );
+        }
+        
+        Ok(config)
+    }
+
+    /// Load config into database (for syncing from TOML)
+    pub fn load_config_to_db(&self, config: &crate::config::Config) -> Result<()> {
+        use crate::database::Repository;
+        
+        // Add organizations (as repositories with org info)
+        // Note: Organizations are represented implicitly through repositories
+        // We'll add repositories which will create the org structure
+        
+        // Add repositories
+        for (url, repo_config) in &config.repositories {
+            let repo = Repository {
+                url: url.clone(),
+                organization: repo_config.organization.clone(),
+                name: repo_config.name.clone(),
+                description: repo_config.description.clone(),
+            };
+            self.add_repository(&repo)?;
+        }
+        
+        Ok(())
+    }
+
+    // Loadout management functions
+    pub fn create_loadout(&self, name: &str) -> Result<i64> {
+        self.conn.execute(
+            "INSERT INTO loadouts (name, is_default) VALUES (?1, 0)",
+            params![name],
+        )?;
+        Ok(self.conn.last_insert_rowid())
+    }
+
+    pub fn get_loadout_id(&self, name: &str) -> Result<Option<i64>> {
+        let result: Result<i64, _> = self.conn.query_row(
+            "SELECT id FROM loadouts WHERE name = ?1",
+            params![name],
+            |row| row.get(0),
+        );
+
+        match result {
+            Ok(id) => Ok(Some(id)),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(e) => Err(e.into()),
+        }
+    }
+
+    pub fn list_loadouts(&self) -> Result<Vec<(i64, String, bool)>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, name, is_default FROM loadouts ORDER BY is_default DESC, name"
+        )?;
+
+        let rows = stmt.query_map([], |row| {
+            Ok((
+                row.get(0)?,
+                row.get(1)?,
+                row.get::<_, i32>(2)? != 0,
+            ))
+        })?;
+
+        let mut loadouts = Vec::new();
+        for row in rows {
+            loadouts.push(row?);
+        }
+        Ok(loadouts)
+    }
+
+    pub fn delete_loadout(&self, name: &str) -> Result<()> {
+        let loadout_id = self.get_loadout_id(name)?
+            .ok_or_else(|| anyhow::anyhow!("Loadout '{}' not found", name))?;
+
+        // Check if it's the default loadout
+        let is_default: i32 = self.conn.query_row(
+            "SELECT is_default FROM loadouts WHERE id = ?1",
+            params![loadout_id],
+            |row| row.get(0),
+        )?;
+
+        if is_default != 0 {
+            return Err(anyhow::anyhow!("Cannot delete the default loadout"));
+        }
+
+        self.conn.execute(
+            "DELETE FROM loadouts WHERE id = ?1",
+            params![loadout_id],
+        )?;
+        Ok(())
+    }
+
+    pub fn save_current_to_loadout(&self, loadout_name: &str) -> Result<()> {
+        let loadout_id = self.get_loadout_id(loadout_name)?
+            .ok_or_else(|| anyhow::anyhow!("Loadout '{}' not found", loadout_name))?;
+
+        // Clear existing associations
+        self.conn.execute(
+            "DELETE FROM loadout_prompts WHERE loadout_id = ?1",
+            params![loadout_id],
+        )?;
+        self.conn.execute(
+            "DELETE FROM loadout_rules WHERE loadout_id = ?1",
+            params![loadout_id],
+        )?;
+
+        // Add all current prompts
+        let mut stmt = self.conn.prepare("SELECT id FROM prompts")?;
+        let prompt_rows = stmt.query_map([], |row| {
+            row.get::<_, i64>(0)
+        })?;
+
+        for prompt_row in prompt_rows {
+            let prompt_id = prompt_row?;
+            self.conn.execute(
+                "INSERT INTO loadout_prompts (loadout_id, prompt_id) VALUES (?1, ?2)",
+                params![loadout_id, prompt_id],
+            )?;
+        }
+
+        // Add all current rules
+        let mut stmt = self.conn.prepare("SELECT id FROM agent_rules")?;
+        let rule_rows = stmt.query_map([], |row| {
+            row.get::<_, i64>(0)
+        })?;
+
+        for rule_row in rule_rows {
+            let rule_id = rule_row?;
+            self.conn.execute(
+                "INSERT INTO loadout_rules (loadout_id, rule_id) VALUES (?1, ?2)",
+                params![loadout_id, rule_id],
+            )?;
+        }
+
+        Ok(())
+    }
+
+    pub fn load_loadout(&self, loadout_name: &str) -> Result<()> {
+        let loadout_id = self.get_loadout_id(loadout_name)?
+            .ok_or_else(|| anyhow::anyhow!("Loadout '{}' not found", loadout_name))?;
+
+        // Get prompts from loadout
+        let mut stmt = self.conn.prepare(
+            "SELECT prompt_id FROM loadout_prompts WHERE loadout_id = ?1"
+        )?;
+        let prompt_rows = stmt.query_map(params![loadout_id], |row| {
+            row.get::<_, i64>(0)
+        })?;
+
+        let mut loadout_prompt_ids: std::collections::HashSet<i64> = std::collections::HashSet::new();
+        for prompt_row in prompt_rows {
+            loadout_prompt_ids.insert(prompt_row?);
+        }
+
+        // Get rules from loadout
+        let mut stmt = self.conn.prepare(
+            "SELECT rule_id FROM loadout_rules WHERE loadout_id = ?1"
+        )?;
+        let rule_rows = stmt.query_map(params![loadout_id], |row| {
+            row.get::<_, i64>(0)
+        })?;
+
+        let mut loadout_rule_ids: std::collections::HashSet<i64> = std::collections::HashSet::new();
+        for rule_row in rule_rows {
+            loadout_rule_ids.insert(rule_row?);
+        }
+
+        // Delete prompts not in loadout
+        let all_prompts: Vec<i64> = {
+            let mut stmt = self.conn.prepare("SELECT id FROM prompts")?;
+            let rows = stmt.query_map([], |row| row.get::<_, i64>(0))?;
+            rows.collect::<Result<Vec<_>, _>>()?
+        };
+
+        for prompt_id in all_prompts {
+            if !loadout_prompt_ids.contains(&prompt_id) {
+                self.conn.execute(
+                    "DELETE FROM prompts WHERE id = ?1",
+                    params![prompt_id],
+                )?;
+            }
+        }
+
+        // Delete rules not in loadout
+        let all_rules: Vec<i64> = {
+            let mut stmt = self.conn.prepare("SELECT id FROM agent_rules")?;
+            let rows = stmt.query_map([], |row| row.get::<_, i64>(0))?;
+            rows.collect::<Result<Vec<_>, _>>()?
+        };
+
+        for rule_id in all_rules {
+            if !loadout_rule_ids.contains(&rule_id) {
+                self.conn.execute(
+                    "DELETE FROM agent_rules WHERE id = ?1",
+                    params![rule_id],
+                )?;
+            }
+        }
+
+        Ok(())
+    }
+
+    pub fn reload_default_loadout(&self) -> Result<()> {
+        self.load_loadout("default")
+    }
+
+    pub fn get_all_agent_rules(&self) -> Result<Vec<AgentRule>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT name, instruction, priority, category FROM agent_rules ORDER BY priority DESC, name"
+        )?;
+
+        let rows = stmt.query_map([], |row| {
+            Ok((
+                row.get(0)?,
+                row.get(1)?,
+                row.get(2)?,
+                row.get(3)?,
+            ))
+        })?;
+
+        let mut rules = Vec::new();
+        for row in rows {
+            rules.push(row?);
+        }
+        Ok(rules)
+    }
+
+    pub fn get_all_prompts(&self) -> Result<Vec<PromptInfo>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT name, prompt_text, description, category FROM prompts ORDER BY name"
+        )?;
+
+        let rows = stmt.query_map([], |row| {
+            Ok((
+                row.get(0)?,
+                row.get(1)?,
+                row.get(2)?,
+                row.get(3)?,
+            ))
+        })?;
+
+        let mut prompts = Vec::new();
+        for row in rows {
+            prompts.push(row?);
+        }
+        Ok(prompts)
     }
 }
 
