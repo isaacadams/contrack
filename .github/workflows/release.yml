@@ -1,12 +1,11 @@
-name: Release
+name: release
 
-permissions:
-  contents: write
+permissions: write-all
 
 on:
   push:
     tags:
-      - 'v*'
+      - '[0-9]+.[0-9]+.[0-9]+'
 
 env:
   CARGO_TERM_COLOR: always
@@ -17,7 +16,7 @@ env:
 
 jobs:
   create-binaries:
-    uses: ./.github/workflows/rust-binaries.yml
+    uses: isaacadams/hat/.github/workflows/rust-binaries.yml@main
     with:
       name: contrack
       version: ${{ github.ref_name }}
@@ -26,8 +25,6 @@ jobs:
     name: create-release
     needs: create-binaries
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
     steps:
       - name: setup
         run: mkdir bin
@@ -51,5 +48,5 @@ jobs:
             ./**/*.tar.gz
           token: ${{ secrets.GITHUB_TOKEN }}
           generate_release_notes: true
-          name: Release ${{ env.RELEASE_VERSION }}
+          name: ${{ env.RELEASE_VERSION }}
           tag_name: ${{ env.RELEASE_VERSION }}
