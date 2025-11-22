@@ -6,35 +6,48 @@ This document provides instructions for AI agents working on the contrack codeba
 
 Before completing any changes, you MUST run the following commands to verify your work:
 
-1. **Code Quality Check**
-   ```bash
-   cargo clippy
-   ```
-   - Fix all clippy warnings and errors
-   - Ensure code follows Rust best practices
+1. **Compilation Verification**
 
-2. **Compilation Verification**
    ```bash
    cargo build
    cargo build --release
    ```
+
    - Both debug and release builds must succeed
    - Fix any compilation errors before proceeding
 
+2. **Code Quality Check**
+
+   ```bash
+   cargo clippy
+   ```
+
+   - Fix all clippy warnings and errors
+   - Ensure code follows Rust best practices
+
 3. **Test Suite**
+
    ```bash
    cargo test
    ```
+
    - All existing tests must pass
    - No regressions in existing functionality
    - If tests fail, see "Test Failure Protocol" below
 
+4. **Create Commit**
+   - After all checks pass, create a commit of all changes made
+   - Use descriptive commit messages that explain what was changed and why
+   - Group related changes into logical commits
+
 ## Test Coverage
 
 1. **Check Coverage**
+
    ```bash
    cargo-tarpaulin --out stdout
    ```
+
    - Review coverage report for gaps
    - Identify code paths without tests
 
@@ -85,13 +98,13 @@ If unit tests fail after your changes:
 
 Before marking work as complete, verify:
 
-- [ ] `cargo clippy` passes with no warnings
 - [ ] `cargo build` succeeds
 - [ ] `cargo build --release` succeeds
+- [ ] `cargo clippy` passes with no warnings
 - [ ] `cargo test` passes (all tests)
 - [ ] Test coverage has been checked with `cargo-tarpaulin`
 - [ ] Missing unit tests have been added
 - [ ] All new code has unit tests
 - [ ] No regressions in existing functionality
 - [ ] If tests failed, maximum 3 attempts were made
-
+- [ ] All changes have been committed with descriptive messages
