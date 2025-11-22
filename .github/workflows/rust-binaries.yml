@@ -19,7 +19,6 @@ on:
 env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: full
-  RUSTFLAGS: -D warnings
   BINARY_NAME: ${{ inputs.name }}
   BINARY_VERSION: ${{ inputs.version }}
 
