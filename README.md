@@ -145,13 +145,13 @@ Query the database.
 
 ```bash
 # List contributions
-contrack query contributions --repo-url <URL>
+contrack query contributions <URL>
 
 # Show contribution details
-contrack query contribution --repo-url <URL> --name <NAME>
+contrack query contribution <URL> <NAME>
 
 # Show commits for a contribution
-contrack query commits --repo-url <URL> --name <NAME>
+contrack query commits <URL> <NAME>
 
 # Show statistics
 contrack query stats
@@ -257,17 +257,13 @@ contrack generate \
 
 ```bash
 # List all contributions
-contrack query contributions --repo-url "https://github.com/myorg/myrepo"
+contrack query contributions "https://github.com/myorg/myrepo"
 
 # Get details for a specific contribution
-contrack query contribution \
-  --repo-url "https://github.com/myorg/myrepo" \
-  --name "API Authentication"
+contrack query contribution "https://github.com/myorg/myrepo" "API Authentication"
 
 # View commits for a contribution
-contrack query commits \
-  --repo-url "https://github.com/myorg/myrepo" \
-  --name "API Authentication"
+contrack query commits "https://github.com/myorg/myrepo" "API Authentication"
 
 # Database statistics
 contrack query stats

@@ -15,6 +15,7 @@ pub fn get_database_path() -> Result<PathBuf> {
 }
 
 /// Get the path to the application config directory
+#[allow(dead_code)]
 pub fn get_config_dir() -> Result<PathBuf> {
     let project_dirs = ProjectDirs::from("com", "contrack", "contrack")
         .context("Failed to determine application config directory")?;

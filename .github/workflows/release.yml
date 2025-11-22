@@ -1,76 +1,55 @@
 name: Release
 
+permissions:
+  contents: write
+
 on:
   push:
     tags:
       - 'v*'
 
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: full
+  RUSTFLAGS: -D warnings
+  # https://docs.github.com/en/actions/learn-github-actions/contexts#github-context
+  RELEASE_VERSION: ${{ github.ref_name }}
+
 jobs:
+  create-binaries:
+    uses: ./.github/workflows/rust-binaries.yml
+    with:
+      name: contrack
+      version: ${{ github.ref_name }}
+
   create-release:
+    name: create-release
+    needs: create-binaries
+    runs-on: ubuntu-latest
     permissions:
       contents: write
-    runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - name: Create Release
-        id: create_release
-        uses: actions/create-release@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          tag_name: ${{ github.ref }}
-          release_name: Release ${{ github.ref }}
-          draft: false
-          prerelease: false
+      - name: setup
+        run: mkdir bin
 
-  build:
-    needs: create-release
-    strategy:
-      matrix:
-        include:
-          - target: x86_64-unknown-linux-gnu
-            os: ubuntu-latest
-            archive: tar.gz
-          - target: x86_64-pc-windows-msvc
-            os: windows-latest
-            archive: zip
-          - target: x86_64-apple-darwin
-            os: macos-latest
-            archive: tar.gz
-          - target: aarch64-apple-darwin
-            os: macos-latest
-            archive: tar.gz
-    runs-on: ${{ matrix.os }}
-    steps:
-      - uses: actions/checkout@v4
-      
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
+      # download artifacts from rust-binaries
+      - uses: actions/download-artifact@v4
         with:
-          targets: ${{ matrix.target }}
-      
-      - name: Build
-        run: cargo build --release --target ${{ matrix.target }}
-      
-      - name: Package (Unix)
-        if: matrix.os != 'windows-latest'
-        run: |
-          cd target/${{ matrix.target }}/release
-          tar czf ../../../../contrack-${{ matrix.target }}.${{ matrix.archive }} contrack
-      
-      - name: Package (Windows)
-        if: matrix.os == 'windows-latest'
-        run: |
-          cd target/${{ matrix.target }}/release
-          7z a ../../../../contrack-${{ matrix.target }}.${{ matrix.archive }} contrack.exe
-      
-      - name: Upload Release Asset
-        uses: actions/upload-release-asset@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          upload_url: ${{ needs.create-release.outputs.upload_url }}
-          asset_path: ./contrack-${{ matrix.target }}.${{ matrix.archive }}
-          asset_name: contrack-${{ matrix.target }}.${{ matrix.archive }}
-          asset_content_type: application/octet-stream
+          path: bin
 
+      # displays the files
+      - name: check
+        run: ls -R
+        working-directory: bin
+
+      # add release to github
+      - name: release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            ./**/*.zip
+            ./**/*.tar.gz
+          token: ${{ secrets.GITHUB_TOKEN }}
+          generate_release_notes: true
+          name: Release ${{ env.RELEASE_VERSION }}
+          tag_name: ${{ env.RELEASE_VERSION }}

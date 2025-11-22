@@ -1,0 +1,132 @@
+name: rust-binaries
+
+on:
+  workflow_call:
+    inputs:
+      name:
+        description: 'name of the CLI'
+        required: true
+        type: string
+      version:
+        description: 'the version being built'
+        required: true
+        type: string
+      dry-run:
+        description: 'only build and skip publishing the artifacts'
+        required: false
+        type: boolean
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: full
+  BINARY_NAME: ${{ inputs.name }}
+  BINARY_VERSION: ${{ inputs.version }}
+
+jobs:
+  create-binaries:
+    name: create-binaries
+    strategy:
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-latest
+            cross: true
+          - target: aarch64-unknown-linux-gnu
+            os: ubuntu-latest
+            cross: true
+          - target: x86_64-apple-darwin
+            os: macos-latest
+            cross: false
+          - target: aarch64-apple-darwin
+            os: macos-latest
+            cross: false
+          - target: x86_64-pc-windows-msvc
+            os: windows-latest
+            cross: false
+    runs-on: ${{ matrix.os }}
+    env:
+      # For some builds, we use cross to test on 32-bit and big-endian
+      # systems.
+      CARGO: 'cargo'
+      BUILD_FLAGS: '--verbose --release'
+      # When CARGO is set to CROSS, TARGET_DIR includes matrix.target.
+      TARGET_DIR: target
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: tool dependencies (Ubuntu)
+        if: ${{ matrix.os == 'ubuntu-latest' }}
+        run: |
+          if ! command -V sudo; then
+            apt-get update
+            apt-get install -y --no-install-recommends sudo
+          fi
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            musl-tools
+
+      - name: install cargo
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: stable
+          target: ${{ matrix.target }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: ${{ matrix.target }}
+
+      - name: use cross
+        if: ${{ matrix.cross }}
+        shell: bash
+        run: |
+          cargo install cross
+          echo "CARGO=cross" >> $GITHUB_ENV
+          echo "BUILD_FLAGS=--target ${{ matrix.target }} ${{ env.BUILD_FLAGS }}" >> $GITHUB_ENV
+          echo "TARGET_DIR=target/${{ matrix.target }}" >> $GITHUB_ENV
+
+      - name: echo
+        shell: bash
+        run: |
+          echo "cargo command is: ${{ env.CARGO }}"
+          echo "build flag(s): ${{ env.BUILD_FLAGS }}"
+          echo "name is: ${{ env.BINARY_NAME }}"
+          echo "version is: ${{ env.BINARY_VERSION }}"
+
+      - name: cargo build
+        run: ${{ env.CARGO }} build ${{ env.BUILD_FLAGS }}
+
+      - name: set BINARY_PATH
+        shell: bash
+        run: |
+          if [ "${{ matrix.os }}" = "windows-latest" ]; then
+            echo "BINARY_PATH=${{ env.TARGET_DIR }}/release/${{ env.BINARY_NAME }}.exe" >> $GITHUB_ENV
+          else
+            echo "BINARY_PATH=${{ env.TARGET_DIR }}/release/${{ env.BINARY_NAME }}" >> $GITHUB_ENV
+          fi
+          echo "path to binary is: ${{ env.BINARY_PATH }}"
+
+      - name: archive
+        if: inputs.dry-run != true
+        shell: bash
+        run: |
+          package="${{ env.BINARY_NAME }}-${{ env.BINARY_VERSION }}-${{ matrix.target }}"
+          echo "PACKAGE=$package" >> $GITHUB_ENV
+          mkdir -p "$package"
+
+          cp README.md "$package/" 2>/dev/null || true
+          cp "${{ env.BINARY_PATH }}" "$package/"
+
+          if [ "${{ matrix.os }}" = "windows-latest" ]; then
+            7z a "$package.zip" "$package"
+            echo "ASSET=$package.zip" >> $GITHUB_ENV
+          else
+            tar czf "$package.tar.gz" "$package"
+            echo "ASSET=$package.tar.gz" >> $GITHUB_ENV
+          fi
+
+      - uses: actions/upload-artifact@v4
+        if: inputs.dry-run != true
+        with:
+          name: ${{ env.PACKAGE }}
+          path: ${{ env.ASSET }}
+
