@@ -3,6 +3,7 @@ use anyhow::Result;
 use std::path::PathBuf;
 
 mod commands;
+mod config;
 mod database;
 mod git;
 mod markdown;
@@ -92,6 +93,20 @@ enum Commands {
         #[arg(short, long)]
         detailed: bool,
     },
+    /// List all known contrack database locations
+    Locations,
+    /// Manage configuration file
+    Config {
+        #[command(subcommand)]
+        subcommand: ConfigCommands,
+    },
+    /// Manage prompt and rule loadouts
+    Loadout {
+        #[command(subcommand)]
+        subcommand: LoadoutCommands,
+    },
+    /// Output AI agent configuration prompt
+    Ai,
 }
 
 #[derive(Subcommand)]
@@ -117,6 +132,69 @@ enum QueryCommands {
     },
     /// Show database statistics
     Stats,
+}
+
+#[derive(Subcommand)]
+enum ConfigCommands {
+    /// Sync database to config.toml (write current state to file)
+    Sync,
+    /// Load config.toml into database (read file and update database)
+    Load,
+    /// Add a new organization
+    AddOrg {
+        /// Organization identifier (key in config)
+        #[arg(short, long)]
+        id: String,
+        /// Organization name
+        #[arg(short, long)]
+        name: String,
+        /// Organization description
+        #[arg(short, long)]
+        description: Option<String>,
+    },
+    /// Add a new repository
+    AddRepo {
+        /// Repository URL
+        #[arg(short, long)]
+        url: String,
+        /// Organization identifier
+        #[arg(short, long)]
+        org: String,
+        /// Repository name
+        #[arg(short, long)]
+        name: String,
+        /// Repository description
+        #[arg(short, long)]
+        description: Option<String>,
+    },
+}
+
+#[derive(Subcommand)]
+enum LoadoutCommands {
+    /// List all loadouts
+    List,
+    /// Create a new empty loadout
+    Create {
+        /// Loadout name
+        name: String,
+    },
+    /// Load a loadout (replace current prompts/rules)
+    Load {
+        /// Loadout name
+        name: String,
+    },
+    /// Save current prompts/rules to a loadout
+    Save {
+        /// Loadout name
+        name: String,
+    },
+    /// Delete a loadout
+    Delete {
+        /// Loadout name
+        name: String,
+    },
+    /// Reload the default loadout
+    ReloadDefault,
 }
 
 fn main() -> Result<()> {
@@ -161,6 +239,22 @@ fn main() -> Result<()> {
             QueryCommands::Stats => query_stats(),
         },
         Commands::List { detailed } => list_repositories(detailed),
+        Commands::Locations => locations_command(),
+        Commands::Config { subcommand } => match subcommand {
+            ConfigCommands::Sync => config_sync_command(),
+            ConfigCommands::Load => config_load_command(),
+            ConfigCommands::AddOrg { id, name, description } => config_add_org_command(id, name, description),
+            ConfigCommands::AddRepo { url, org, name, description } => config_add_repo_command(url, org, name, description),
+        },
+        Commands::Loadout { subcommand } => match subcommand {
+            LoadoutCommands::List => loadout_list_command(),
+            LoadoutCommands::Create { name } => loadout_create_command(name),
+            LoadoutCommands::Load { name } => loadout_load_command(name),
+            LoadoutCommands::Save { name } => loadout_save_command(name),
+            LoadoutCommands::Delete { name } => loadout_delete_command(name),
+            LoadoutCommands::ReloadDefault => loadout_reload_default_command(),
+        },
+        Commands::Ai => ai_command(),
     }
 }
 
