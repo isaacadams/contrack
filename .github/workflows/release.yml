@@ -6,26 +6,11 @@ on:
       - 'v*'
 
 jobs:
-  create-release:
+  build:
     permissions:
       contents: write
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - name: Create Release
-        id: create_release
-        uses: actions/create-release@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          tag_name: ${{ github.ref }}
-          release_name: Release ${{ github.ref }}
-          draft: false
-          prerelease: false
-
-  build:
-    needs: create-release
     strategy:
+      fail-fast: false
       matrix:
         include:
           - target: x86_64-unknown-linux-gnu
@@ -65,12 +50,12 @@ jobs:
           7z a ../../../../contrack-${{ matrix.target }}.${{ matrix.archive }} contrack.exe
       
       - name: Upload Release Asset
-        uses: actions/upload-release-asset@v1
+        uses: softprops/action-gh-release@v2
+        with:
+          files: contrack-${{ matrix.target }}.${{ matrix.archive }}
+          tag_name: ${{ github.ref_name }}
+          name: Release ${{ github.ref_name }}
+          draft: false
+          prerelease: false
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          upload_url: ${{ needs.create-release.outputs.upload_url }}
-          asset_path: ./contrack-${{ matrix.target }}.${{ matrix.archive }}
-          asset_name: contrack-${{ matrix.target }}.${{ matrix.archive }}
-          asset_content_type: application/octet-stream
-
