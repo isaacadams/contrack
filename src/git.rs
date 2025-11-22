@@ -94,6 +94,7 @@ pub fn extract_commits_from_repo(repo_path: &PathBuf) -> Result<Vec<Commit>> {
     Ok(commits)
 }
 
+#[allow(dead_code)]
 pub fn get_commit_details(commit_hash: &str, repo_path: &PathBuf) -> Result<Option<Commit>> {
     let repo = Repository::open(repo_path)
         .with_context(|| format!("Failed to open git repository at {:?}", repo_path))?;
