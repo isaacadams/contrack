@@ -1,20 +1,23 @@
-use clap::{Parser, Subcommand};
 use anyhow::Result;
+use clap::{Parser, Subcommand, ValueEnum};
 use std::path::PathBuf;
 
 mod commands;
-mod config;
 mod database;
 mod git;
 mod markdown;
 mod utils;
 
-use commands::*;
+#[derive(Debug, Clone, Copy, ValueEnum)]
+pub enum MarkdownStyle {
+    Resume,
+    Portfolio,
+}
 
 #[derive(Parser)]
 #[command(name = "contrack")]
-#[command(about = "A CLI tool for tracking and documenting code contributions", long_about = None)]
 #[command(version)]
+#[command(about = "Turn noisy git history into structured, reusable contribution notes.")]
 struct Cli {
     #[command(subcommand)]
     command: Commands,
@@ -22,239 +25,265 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
-    /// Initialize a new contributions database
-    Init {
-        /// Repository URL (e.g., https://github.com/org/repo)
-        #[arg(short, long)]
-        repo_url: String,
-        /// Organization name
-        #[arg(short, long)]
-        org: String,
-        /// Repository name
-        #[arg(short, long)]
-        name: String,
-        /// Repository description
-        #[arg(short, long)]
-        description: Option<String>,
-    },
-    /// Add a new contribution
-    Add {
-        /// Repository URL
-        #[arg(short, long)]
-        repo_url: String,
-        /// Contribution name
-        #[arg(short, long)]
-        name: String,
-        /// Brief overview
-        #[arg(short, long)]
-        overview: String,
-        /// Detailed description
-        #[arg(short, long)]
-        description: String,
-        /// Key commit hashes (comma-separated)
-        #[arg(short, long)]
-        key_commits: String,
-        /// Related commit hashes (comma-separated, optional)
-        #[arg(long)]
-        related_commits: Option<String>,
-        /// Category (Core Feature, Integration, Infrastructure, etc.)
-        #[arg(short, long, default_value = "Feature")]
-        category: String,
-        /// Priority (1-10, higher is more important)
-        #[arg(short, long, default_value_t = 5)]
-        priority: u8,
-    },
-    /// Update commit details from git repository
-    Update {
-        /// Path to git repository (defaults to current directory)
-        #[arg(short, long)]
-        repo_path: Option<PathBuf>,
-    },
-    /// Generate contributions markdown file
-    Generate {
-        /// Repository URL
-        #[arg(short, long)]
-        repo_url: String,
-        /// Output file path (defaults to CONTRIBUTIONS.md)
-        #[arg(short, long, default_value = "CONTRIBUTIONS.md")]
-        output: PathBuf,
-        /// Author name to filter by (optional)
-        #[arg(short, long)]
-        author: Option<String>,
-    },
-    /// Query the database
-    Query {
+    /// Create a local .contrack workspace in the current project.
+    Init,
+    /// Track repositories that should feed contribution data.
+    Repo {
         #[command(subcommand)]
-        subcommand: QueryCommands,
+        command: RepoCommands,
     },
-    /// List repositories in the database
-    List {
-        /// Show detailed information
-        #[arg(short, long)]
-        detailed: bool,
-    },
-    /// List all known contrack database locations
-    Locations,
-    /// Manage configuration file
-    Config {
-        #[command(subcommand)]
-        subcommand: ConfigCommands,
-    },
-    /// Manage prompt and rule loadouts
-    Loadout {
-        #[command(subcommand)]
-        subcommand: LoadoutCommands,
-    },
-    /// Output AI agent configuration prompt
-    Ai,
-}
-
-#[derive(Subcommand)]
-enum QueryCommands {
-    /// List all contributions for a repository
-    Contributions {
-        /// Repository URL
-        repo_url: String,
-    },
-    /// Show details for a specific contribution
+    /// Create, update, and inspect contributions.
     Contribution {
-        /// Repository URL
-        repo_url: String,
-        /// Contribution name
-        name: String,
+        #[command(subcommand)]
+        command: ContributionCommands,
     },
-    /// Show commits for a contribution
-    Commits {
-        /// Repository URL
-        repo_url: String,
-        /// Contribution name
-        name: String,
+    /// Import and inspect git commit evidence.
+    Commit {
+        #[command(subcommand)]
+        command: CommitCommands,
     },
-    /// Show database statistics
-    Stats,
+    /// Refresh imported commit metadata for tracked repositories.
+    #[command(visible_alias = "update")]
+    Refresh {
+        /// Refresh a single tracked repository by slug, name, path, or remote URL.
+        repo: Option<String>,
+        /// Refresh every tracked repository.
+        #[arg(long)]
+        all: bool,
+    },
+    /// Generate polished Markdown output.
+    Generate {
+        #[command(subcommand)]
+        command: GenerateCommands,
+    },
+    /// Show database and repository statistics.
+    Stats {
+        /// Limit stats to one tracked repository.
+        repo: Option<String>,
+    },
+    /// Show active and fallback database locations.
+    Locations,
 }
 
 #[derive(Subcommand)]
-enum ConfigCommands {
-    /// Sync database to config.toml (write current state to file)
-    Sync,
-    /// Load config.toml into database (read file and update database)
-    Load,
-    /// Add a new organization
-    AddOrg {
-        /// Organization identifier (key in config)
-        #[arg(short, long)]
-        id: String,
-        /// Organization name
-        #[arg(short, long)]
-        name: String,
-        /// Organization description
-        #[arg(short, long)]
-        description: Option<String>,
+enum RepoCommands {
+    /// Track a git repository.
+    Add {
+        /// Repository path. Defaults to the current directory.
+        path: Option<PathBuf>,
+        /// Friendly display name. Defaults to the repository directory name.
+        #[arg(long)]
+        name: Option<String>,
+        /// Stable short identifier used in commands.
+        #[arg(long)]
+        slug: Option<String>,
     },
-    /// Add a new repository
-    AddRepo {
-        /// Repository URL
-        #[arg(short, long)]
-        url: String,
-        /// Organization identifier
-        #[arg(short, long)]
-        org: String,
-        /// Repository name
-        #[arg(short, long)]
-        name: String,
-        /// Repository description
-        #[arg(short, long)]
-        description: Option<String>,
-    },
-}
-
-#[derive(Subcommand)]
-enum LoadoutCommands {
-    /// List all loadouts
+    /// List tracked repositories.
     List,
-    /// Create a new empty loadout
-    Create {
-        /// Loadout name
-        name: String,
+    /// Remove a tracked repository and all of its stored data.
+    Remove {
+        /// Repository slug, name, path, or remote URL.
+        repo: String,
     },
-    /// Load a loadout (replace current prompts/rules)
-    Load {
-        /// Loadout name
+}
+
+#[derive(Subcommand)]
+enum ContributionCommands {
+    /// Add a contribution.
+    Add {
+        /// Repository slug, name, path, or remote URL. Defaults to the current repo.
+        #[arg(long)]
+        repo: Option<String>,
+        #[arg(long)]
         name: String,
+        #[arg(long)]
+        overview: String,
+        #[arg(long, visible_alias = "long-description")]
+        description: String,
+        #[arg(long, default_value = "Feature")]
+        category: String,
+        #[arg(long, default_value_t = 3)]
+        priority: u8,
+        /// Repeat for each key commit hash or short hash.
+        #[arg(long = "key-commit", required = true)]
+        key_commits: Vec<String>,
+        /// Repeat for each related commit hash or short hash.
+        #[arg(long = "related-commit")]
+        related_commits: Vec<String>,
+        /// Optional implementation details to include in generated Markdown.
+        #[arg(long = "technical-detail")]
+        technical_details: Vec<String>,
+        /// Optional resume-ready bullet points.
+        #[arg(long = "resume-bullet")]
+        resume_bullets: Vec<String>,
     },
-    /// Save current prompts/rules to a loadout
-    Save {
-        /// Loadout name
-        name: String,
+    /// Edit a contribution by id or name.
+    Edit {
+        contribution: String,
+        #[arg(long)]
+        name: Option<String>,
+        #[arg(long)]
+        overview: Option<String>,
+        #[arg(long, visible_alias = "long-description")]
+        description: Option<String>,
+        #[arg(long)]
+        category: Option<String>,
+        #[arg(long)]
+        priority: Option<u8>,
+        #[arg(long = "key-commit")]
+        key_commits: Option<Vec<String>>,
+        #[arg(long = "related-commit")]
+        related_commits: Option<Vec<String>>,
+        #[arg(long = "technical-detail")]
+        technical_details: Option<Vec<String>>,
+        #[arg(long = "resume-bullet")]
+        resume_bullets: Option<Vec<String>>,
+        #[arg(long)]
+        clear_key_commits: bool,
+        #[arg(long)]
+        clear_related_commits: bool,
+        #[arg(long)]
+        clear_technical_details: bool,
+        #[arg(long)]
+        clear_resume_bullets: bool,
     },
-    /// Delete a loadout
-    Delete {
-        /// Loadout name
-        name: String,
+    /// List contributions.
+    List {
+        /// Repository slug, name, path, or remote URL. Defaults to the current repo.
+        #[arg(long)]
+        repo: Option<String>,
     },
-    /// Reload the default loadout
-    ReloadDefault,
+    /// Show one contribution in detail.
+    Show { contribution: String },
+}
+
+#[derive(Subcommand)]
+enum CommitCommands {
+    /// Import commit metadata for tracked repositories.
+    Import {
+        /// Repository slug, name, path, or remote URL.
+        repo: Option<String>,
+        /// Import every tracked repository.
+        #[arg(long)]
+        all: bool,
+    },
+    /// List imported commits.
+    List {
+        /// Repository slug, name, path, or remote URL. Defaults to the current repo.
+        #[arg(long)]
+        repo: Option<String>,
+        /// Filter to commits linked by hash to a contribution.
+        #[arg(long)]
+        contribution: Option<String>,
+        /// Maximum number of commits to show.
+        #[arg(long, default_value_t = 20)]
+        limit: usize,
+    },
+}
+
+#[derive(Subcommand)]
+enum GenerateCommands {
+    /// Generate structured Markdown from stored contributions.
+    Markdown {
+        /// Repository slug, name, path, or remote URL. Defaults to the current repo.
+        #[arg(long)]
+        repo: Option<String>,
+        #[arg(long, value_enum, default_value_t = MarkdownStyle::Resume)]
+        style: MarkdownStyle,
+        /// Write Markdown to a file instead of stdout.
+        #[arg(long)]
+        output: Option<PathBuf>,
+    },
 }
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
 
     match cli.command {
-        Commands::Init {
-            repo_url,
-            org,
-            name,
-            description,
-        } => init_command(repo_url, org, name, description),
-        Commands::Add {
-            repo_url,
-            name,
-            overview,
-            description,
-            key_commits,
-            related_commits,
-            category,
-            priority,
-        } => add_command(
-            repo_url,
-            name,
-            overview,
-            description,
-            key_commits,
-            related_commits,
-            category,
-            priority,
-        ),
-        Commands::Update { repo_path } => update_command(repo_path),
-        Commands::Generate {
-            repo_url,
-            output,
-            author,
-        } => generate_command(repo_url, output, author),
-        Commands::Query { subcommand } => match subcommand {
-            QueryCommands::Contributions { repo_url } => query_contributions(repo_url),
-            QueryCommands::Contribution { repo_url, name } => query_contribution(repo_url, name),
-            QueryCommands::Commits { repo_url, name } => query_commits(repo_url, name),
-            QueryCommands::Stats => query_stats(),
+        Commands::Init => commands::init_command(),
+        Commands::Repo { command } => match command {
+            RepoCommands::Add { path, name, slug } => commands::repo_add_command(path, name, slug),
+            RepoCommands::List => commands::repo_list_command(),
+            RepoCommands::Remove { repo } => commands::repo_remove_command(repo),
         },
-        Commands::List { detailed } => list_repositories(detailed),
-        Commands::Locations => locations_command(),
-        Commands::Config { subcommand } => match subcommand {
-            ConfigCommands::Sync => config_sync_command(),
-            ConfigCommands::Load => config_load_command(),
-            ConfigCommands::AddOrg { id, name, description } => config_add_org_command(id, name, description),
-            ConfigCommands::AddRepo { url, org, name, description } => config_add_repo_command(url, org, name, description),
+        Commands::Contribution { command } => match command {
+            ContributionCommands::Add {
+                repo,
+                name,
+                overview,
+                description,
+                category,
+                priority,
+                key_commits,
+                related_commits,
+                technical_details,
+                resume_bullets,
+            } => commands::contribution_add_command(
+                repo,
+                name,
+                overview,
+                description,
+                category,
+                priority,
+                key_commits,
+                related_commits,
+                technical_details,
+                resume_bullets,
+            ),
+            ContributionCommands::Edit {
+                contribution,
+                name,
+                overview,
+                description,
+                category,
+                priority,
+                key_commits,
+                related_commits,
+                technical_details,
+                resume_bullets,
+                clear_key_commits,
+                clear_related_commits,
+                clear_technical_details,
+                clear_resume_bullets,
+            } => commands::contribution_edit_command(
+                contribution,
+                name,
+                overview,
+                description,
+                category,
+                priority,
+                key_commits,
+                related_commits,
+                technical_details,
+                resume_bullets,
+                clear_key_commits,
+                clear_related_commits,
+                clear_technical_details,
+                clear_resume_bullets,
+            ),
+            ContributionCommands::List { repo } => commands::contribution_list_command(repo),
+            ContributionCommands::Show { contribution } => {
+                commands::contribution_show_command(contribution)
+            }
         },
-        Commands::Loadout { subcommand } => match subcommand {
-            LoadoutCommands::List => loadout_list_command(),
-            LoadoutCommands::Create { name } => loadout_create_command(name),
-            LoadoutCommands::Load { name } => loadout_load_command(name),
-            LoadoutCommands::Save { name } => loadout_save_command(name),
-            LoadoutCommands::Delete { name } => loadout_delete_command(name),
-            LoadoutCommands::ReloadDefault => loadout_reload_default_command(),
+        Commands::Commit { command } => match command {
+            CommitCommands::Import { repo, all } => commands::commit_import_command(repo, all),
+            CommitCommands::List {
+                repo,
+                contribution,
+                limit,
+            } => commands::commit_list_command(repo, contribution, limit),
         },
-        Commands::Ai => ai_command(),
+        Commands::Refresh { repo, all } => commands::refresh_command(repo, all),
+        Commands::Generate { command } => match command {
+            GenerateCommands::Markdown {
+                repo,
+                style,
+                output,
+            } => commands::generate_markdown_command(repo, style, output),
+        },
+        Commands::Stats { repo } => commands::stats_command(repo),
+        Commands::Locations => commands::locations_command(),
     }
 }
 
@@ -263,70 +292,41 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_add_command_parsing() {
-        // Test that add command can parse with both repo_url and related_commits
-        // This ensures there's no short option conflict
-        let args = vec![
+    fn parse_contribution_add() {
+        let cli = Cli::try_parse_from([
             "contrack",
+            "contribution",
             "add",
-            "--repo-url", "https://github.com/test/repo",
-            "--name", "Test Feature",
-            "--overview", "Test overview",
-            "--description", "Test description",
-            "--key-commits", "abc123",
-            "--related-commits", "def456",
-            "--category", "Feature",
-            "--priority", "5",
-        ];
-        
-        let cli = Cli::try_parse_from(args).unwrap();
+            "--name",
+            "CLI overhaul",
+            "--overview",
+            "Simplified the command surface.",
+            "--description",
+            "Rebuilt the CLI around repositories, contributions, commits, and Markdown output.",
+            "--key-commit",
+            "abc1234",
+            "--category",
+            "Tooling",
+            "--priority",
+            "5",
+        ])
+        .expect("command should parse");
+
         match cli.command {
-            Commands::Add {
-                repo_url,
-                name,
-                overview,
-                description,
-                key_commits,
-                related_commits,
-                category,
-                priority,
+            Commands::Contribution {
+                command:
+                    ContributionCommands::Add {
+                        name,
+                        key_commits,
+                        priority,
+                        ..
+                    },
             } => {
-                assert_eq!(repo_url, "https://github.com/test/repo");
-                assert_eq!(name, "Test Feature");
-                assert_eq!(overview, "Test overview");
-                assert_eq!(description, "Test description");
-                assert_eq!(key_commits, "abc123");
-                assert_eq!(related_commits, Some("def456".to_string()));
-                assert_eq!(category, "Feature");
+                assert_eq!(name, "CLI overhaul");
+                assert_eq!(key_commits, vec!["abc1234"]);
                 assert_eq!(priority, 5);
             }
-            _ => panic!("Expected Add command"),
-        }
-    }
-
-    #[test]
-    fn test_add_command_with_short_options() {
-        // Test that short option -r works for repo_url
-        let args = vec![
-            "contrack",
-            "add",
-            "-r", "https://github.com/test/repo",
-            "-n", "Test Feature",
-            "-o", "Test overview",
-            "-d", "Test description",
-            "-k", "abc123",
-            "--related-commits", "def456", // Should use long form
-            "-c", "Feature",
-            "-p", "5",
-        ];
-        
-        let cli = Cli::try_parse_from(args).unwrap();
-        match cli.command {
-            Commands::Add { repo_url, .. } => {
-                assert_eq!(repo_url, "https://github.com/test/repo");
-            }
-            _ => panic!("Expected Add command"),
+            _ => panic!("expected contribution add"),
         }
     }
 }
-

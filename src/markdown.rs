@@ -1,131 +1,232 @@
-use anyhow::Result;
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 
-use crate::database::{Commit, Contribution};
+use crate::database::{Contribution, StoredCommit, TrackedRepository};
+use crate::utils::{join_lines, shorten_hash};
+use crate::MarkdownStyle;
 
-pub fn generate_markdown(
-    repo_url: &str,
-    contributions: &[(Contribution, Vec<Commit>)],
-    author_filter: Option<&str>,
-) -> Result<String> {
+#[derive(Debug, Clone)]
+pub struct ContributionEvidence {
+    pub contribution: Contribution,
+    pub key_commits: Vec<StoredCommit>,
+    pub related_commits: Vec<StoredCommit>,
+    pub unresolved_key_refs: Vec<String>,
+    pub unresolved_related_refs: Vec<String>,
+}
+
+pub fn render_markdown(
+    repository: &TrackedRepository,
+    items: &[ContributionEvidence],
+    style: MarkdownStyle,
+) -> String {
     let mut output = String::new();
+    let heading = match style {
+        MarkdownStyle::Resume => "Resume-Ready Contributions",
+        MarkdownStyle::Portfolio => "Portfolio Contribution Summary",
+    };
 
-    // Header
-    output.push_str("# Contributions\n\n");
-    output.push_str("This document provides a comprehensive overview of all contributions for this repository.\n\n");
-    output.push_str(&format!("**Repository:** {}\n\n", repo_url));
-    output.push_str("---\n\n");
+    output.push_str(&format!("# {}\n\n", heading));
+    output.push_str(&format!(
+        "**Repository:** {} (`{}`)\n",
+        repository.name, repository.slug
+    ));
+    if let Some(remote_url) = &repository.remote_url {
+        output.push_str(&format!("**Remote:** {}\n", remote_url));
+    }
+    output.push('\n');
 
-    // Group by category
-    let mut by_category: HashMap<String, Vec<&(Contribution, Vec<Commit>)>> = HashMap::new();
-    for contrib in contributions {
-        by_category
-            .entry(contrib.0.category.clone())
+    let mut grouped: BTreeMap<String, Vec<&ContributionEvidence>> = BTreeMap::new();
+    for item in items {
+        grouped
+            .entry(item.contribution.category.clone())
             .or_default()
-            .push(contrib);
+            .push(item);
     }
 
-    // Sort categories by priority of first contribution
-    let mut categories: Vec<_> = by_category.iter().collect();
-    categories.sort_by_key(|(_, contribs)| {
-        contribs
-            .iter()
-            .map(|(c, _)| c.priority)
-            .max()
-            .unwrap_or(0)
-    });
-    categories.reverse();
+    let mut grouped = grouped.into_iter().collect::<Vec<_>>();
+    grouped.sort_by(|left, right| category_sort_key(&right.1).cmp(&category_sort_key(&left.1)));
 
-    // Generate sections
-    for (category, contribs) in categories {
+    for (category, mut contributions) in grouped {
+        contributions.sort_by(|left, right| {
+            right
+                .contribution
+                .priority
+                .cmp(&left.contribution.priority)
+                .then_with(|| left.contribution.name.cmp(&right.contribution.name))
+        });
+
         output.push_str(&format!("## {}\n\n", category));
-        output.push_str("### Overview\n\n");
-        output.push_str(&format!(
-            "This section contains {} contribution(s) in the {} category.\n\n",
-            contribs.len(),
-            category
-        ));
-        output.push_str("---\n\n");
 
-        // Sort contributions by priority
-        let mut sorted_contribs = contribs.clone();
-        sorted_contribs.sort_by_key(|(c, _)| c.priority);
-        sorted_contribs.reverse();
-
-        for (contrib, commits) in sorted_contribs {
-            // Filter commits by author if specified
-            let filtered_commits: Vec<&Commit> = if let Some(author) = author_filter {
-                commits
-                    .iter()
-                    .filter(|c| c.author.contains(author))
-                    .collect()
-            } else {
-                commits.iter().collect()
-            };
-
-            if author_filter.is_some() && filtered_commits.is_empty() {
-                continue;
+        for item in contributions {
+            match style {
+                MarkdownStyle::Resume => render_resume_entry(&mut output, item),
+                MarkdownStyle::Portfolio => render_portfolio_entry(&mut output, item),
             }
-
-            output.push_str(&format!("### {}\n\n", contrib.name));
-            output.push_str(&format!("**Category:** {} | **Priority:** {}\n\n", 
-                                   contrib.category, contrib.priority));
-            output.push_str(&format!("{}\n\n", contrib.overview));
-            output.push_str(&format!("{}\n\n", contrib.description));
-
-            // Key commits
-            if !contrib.key_commits.is_empty() {
-                output.push_str("#### Key Commits\n\n");
-                for commit_hash in &contrib.key_commits {
-                    if let Some(commit) = filtered_commits.iter().find(|c| c.hash.starts_with(commit_hash)) {
-                        output.push_str(&format!("- **{}** - {}\n", 
-                                                &commit.hash[..8], 
-                                                commit.message.lines().next().unwrap_or("")));
-                        output.push_str(&format!("  - Author: {} ({})\n", commit.author, commit.date));
-                    } else {
-                        output.push_str(&format!("- {}\n", commit_hash));
-                    }
-                }
-                output.push('\n');
-            }
-
-            // Technical details
-            if !contrib.technical_details.is_empty() {
-                output.push_str("#### Technical Details\n\n");
-                for (key, value) in &contrib.technical_details {
-                    output.push_str(&format!("- **{}**: {}\n", key, value));
-                }
-                output.push('\n');
-            }
-
-            // Resume bullets
-            if !contrib.resume_bullets.is_empty() {
-                output.push_str("#### Resume Bullet Points\n\n");
-                for bullet in &contrib.resume_bullets {
-                    output.push_str(&format!("- {}\n", bullet));
-                }
-                output.push('\n');
-            }
-
-            output.push_str("---\n\n");
         }
     }
 
-    // Footer
-    output.push_str("## Summary\n\n");
-    output.push_str(&format!(
-        "Total contributions documented: {}\n\n",
-        contributions.len()
-    ));
+    output
+}
 
-    if let Some(author) = author_filter {
-        output.push_str(&format!("*Filtered by author: {}*\n", author));
+fn render_resume_entry(output: &mut String, item: &ContributionEvidence) {
+    output.push_str(&format!("### {}\n\n", item.contribution.name));
+    output.push_str(&format!("{}\n\n", item.contribution.overview));
+
+    if !item.contribution.resume_bullets.is_empty() {
+        output.push_str(&join_lines(&item.contribution.resume_bullets));
+        output.push_str("\n\n");
+    } else {
+        output.push_str(&format!("- {}\n\n", item.contribution.description));
+    }
+
+    if !item.key_commits.is_empty() {
+        let hashes = item
+            .key_commits
+            .iter()
+            .map(|commit| format!("`{}`", shorten_hash(&commit.hash)))
+            .collect::<Vec<_>>()
+            .join(", ");
+        output.push_str(&format!("Evidence: {}\n\n", hashes));
+    }
+}
+
+fn render_portfolio_entry(output: &mut String, item: &ContributionEvidence) {
+    output.push_str(&format!("### {}\n\n", item.contribution.name));
+    output.push_str(&format!("**Priority:** {}\n\n", item.contribution.priority));
+    output.push_str(&format!("{}\n\n", item.contribution.overview));
+    output.push_str(&format!("{}\n\n", item.contribution.description));
+
+    if !item.contribution.technical_details.is_empty() {
+        output.push_str("#### Technical Details\n\n");
+        output.push_str(&join_lines(&item.contribution.technical_details));
+        output.push_str("\n\n");
+    }
+
+    if !item.contribution.resume_bullets.is_empty() {
+        output.push_str("#### Resume Bullets\n\n");
+        output.push_str(&join_lines(&item.contribution.resume_bullets));
+        output.push_str("\n\n");
+    }
+
+    render_commit_section(
+        output,
+        "Key Commits",
+        &item.key_commits,
+        &item.unresolved_key_refs,
+    );
+    render_commit_section(
+        output,
+        "Related Commits",
+        &item.related_commits,
+        &item.unresolved_related_refs,
+    );
+}
+
+fn render_commit_section(
+    output: &mut String,
+    title: &str,
+    commits: &[StoredCommit],
+    unresolved_refs: &[String],
+) {
+    if commits.is_empty() && unresolved_refs.is_empty() {
+        return;
+    }
+
+    output.push_str(&format!("#### {}\n\n", title));
+
+    for commit in commits {
+        output.push_str(&format!(
+            "- `{}` {} (+{}, -{})\n",
+            shorten_hash(&commit.hash),
+            commit.summary,
+            commit.lines_added,
+            commit.lines_deleted,
+        ));
+    }
+
+    for unresolved in unresolved_refs {
+        output.push_str(&format!("- `{}` (not imported yet)\n", unresolved));
     }
 
     output.push('\n');
-    output.push_str("---\n\n");
-    output.push_str("*This document was generated by contrack.*\n");
-
-    Ok(output)
 }
 
+fn category_sort_key(items: &[&ContributionEvidence]) -> (u8, String) {
+    let highest_priority = items
+        .iter()
+        .map(|item| item.contribution.priority)
+        .max()
+        .unwrap_or_default();
+    let category = items
+        .first()
+        .map(|item| item.contribution.category.clone())
+        .unwrap_or_default();
+
+    (highest_priority, category)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn repository() -> TrackedRepository {
+        TrackedRepository {
+            id: 1,
+            slug: "contrack".to_string(),
+            name: "Contrack".to_string(),
+            local_path: "/tmp/contrack".to_string(),
+            remote_url: Some("https://github.com/isaacadams/contrack".to_string()),
+        }
+    }
+
+    fn contribution(name: &str, category: &str, priority: u8) -> Contribution {
+        Contribution {
+            id: 1,
+            repository_id: 1,
+            repository_slug: "contrack".to_string(),
+            name: name.to_string(),
+            overview: format!("Overview for {name}"),
+            description: format!("Description for {name}"),
+            category: category.to_string(),
+            priority,
+            key_commit_refs: vec!["abc123".to_string()],
+            related_commit_refs: Vec::new(),
+            technical_details: vec!["Rust CLI".to_string()],
+            resume_bullets: vec![format!("Delivered {name}")],
+        }
+    }
+
+    fn commit(summary: &str) -> StoredCommit {
+        StoredCommit {
+            hash: "abc123456789".to_string(),
+            author_name: "Isaac".to_string(),
+            committed_at: "now".to_string(),
+            summary: summary.to_string(),
+            files_changed: vec!["src/main.rs".to_string()],
+            lines_added: 10,
+            lines_deleted: 2,
+        }
+    }
+
+    #[test]
+    fn renders_categories_by_priority() {
+        let feature = ContributionEvidence {
+            contribution: contribution("Generator", "Feature", 5),
+            key_commits: vec![commit("generator commit")],
+            related_commits: Vec::new(),
+            unresolved_key_refs: Vec::new(),
+            unresolved_related_refs: Vec::new(),
+        };
+        let bugfix = ContributionEvidence {
+            contribution: contribution("Cleanup", "Bug Fix", 2),
+            key_commits: vec![commit("cleanup commit")],
+            related_commits: Vec::new(),
+            unresolved_key_refs: Vec::new(),
+            unresolved_related_refs: Vec::new(),
+        };
+
+        let rendered = render_markdown(&repository(), &[bugfix, feature], MarkdownStyle::Portfolio);
+        let feature_index = rendered.find("## Feature").expect("feature section");
+        let bugfix_index = rendered.find("## Bug Fix").expect("bugfix section");
+        assert!(feature_index < bugfix_index);
+    }
+}

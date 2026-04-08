@@ -1,318 +1,228 @@
 # Contrack
 
-A CLI tool for tracking and documenting code contributions across repositories. Built for AI agents and developers to maintain consistent contribution documentation.
+Contrack is a focused personal contribution ledger for developers.
 
-## Features
+It helps you record meaningful code contributions, link them to git evidence, and generate clean Markdown you can reuse in resumes, portfolios, performance reviews, and project summaries.
 
-- 📊 **Track Contributions** - Store and organize code contributions with metadata
-- 🔍 **Git Integration** - Automatically extract commit details from git repositories
-- 📝 **Markdown Generation** - Generate beautiful contribution documentation
-- 🗄️ **SQLite Database** - Store data in a portable SQLite database
-- 🤖 **AI-Friendly** - Designed with AI agents in mind, includes built-in rules and prompts
-- 🎯 **Cross-Platform** - Works on macOS, Linux, and Windows
+> Contrack turns noisy git history into structured, high-signal contributions that you can reuse for your resume and portfolio.
+
+## V1 Scope
+
+Contrack V1 does five things well:
+
+1. Track repositories
+2. Import and refresh commit metadata from git
+3. Track structured contributions
+4. Query contributions, commits, stats, and database locations
+5. Generate polished Markdown grouped by category and ordered by priority
 
 ## Installation
 
-### Install from crates.io (Recommended)
-
-If you have Rust installed, you can install Contrack directly from [crates.io](https://crates.io):
+Build from source with Rust 1.78+:
 
 ```bash
-cargo install contrack
-```
-
-This will install the latest published version to `~/.cargo/bin/contrack` (or `%USERPROFILE%\.cargo\bin\contrack` on Windows). Make sure `~/.cargo/bin` is in your PATH.
-
-### Download Pre-built Binaries
-
-Download the latest release for your platform from the [Releases](https://github.com/yourusername/contrack/releases) page:
-
-#### macOS
-```bash
-# Intel
-curl -L https://github.com/yourusername/contrack/releases/latest/download/contrack-x86_64-apple-darwin.tar.gz | tar xz
-sudo mv contrack /usr/local/bin/
-
-# Apple Silicon
-curl -L https://github.com/yourusername/contrack/releases/latest/download/contrack-aarch64-apple-darwin.tar.gz | tar xz
-sudo mv contrack /usr/local/bin/
-```
-
-#### Linux
-```bash
-curl -L https://github.com/yourusername/contrack/releases/latest/download/contrack-x86_64-unknown-linux-gnu.tar.gz | tar xz
-sudo mv contrack /usr/local/bin/
-```
-
-#### Windows
-1. Download `contrack-x86_64-pc-windows-msvc.zip` from the [Releases](https://github.com/yourusername/contrack/releases) page
-2. Extract the archive
-3. Add the extracted directory to your PATH
-
-### Build from Source
-
-Requires Rust 1.70+ and Cargo.
-
-```bash
-git clone https://github.com/yourusername/contrack.git
+git clone https://github.com/isaacadams/contrack.git
 cd contrack
 cargo build --release
-sudo cp target/release/contrack /usr/local/bin/
+./target/release/contrack --help
+```
+
+To install it into your Cargo bin directory:
+
+```bash
+cargo install --path .
 ```
 
 ## Quick Start
 
-### 1. Initialize a Repository
+Initialize a project-local workspace:
 
 ```bash
-contrack init \
-  --repo-url "https://github.com/org/repo" \
-  --org "MyOrg" \
-  --name "my-repo" \
-  --description "My awesome repository"
+contrack init
 ```
 
-### 2. Add a Contribution
+Track the current repository:
 
 ```bash
-contrack add \
-  --repo-url "https://github.com/org/repo" \
-  --name "Feature: User Authentication" \
-  --overview "Implemented OAuth2 authentication flow" \
-  --description "Added comprehensive OAuth2 integration with Google and GitHub providers..." \
-  --key-commits "abc123,def456" \
+contrack repo add .
+```
+
+Import commit metadata:
+
+```bash
+contrack commit import
+```
+
+Add a contribution linked to commit evidence:
+
+```bash
+contrack contribution add \
+  --name "Contribution ledger V1" \
+  --overview "Refactored the CLI around repository, contribution, and markdown workflows." \
+  --description "Removed AI/config bloat, rebuilt the schema, and shipped polished markdown generation for resume and portfolio use." \
   --category "Core Feature" \
-  --priority 9
+  --priority 5 \
+  --key-commit abc1234 \
+  --related-commit def5678 \
+  --technical-detail "SQLite schema centered on repositories, contributions, and imported commits" \
+  --technical-detail "Git remote normalization supports SSH and HTTPS remotes" \
+  --resume-bullet "Turned raw git history into structured, reusable contribution records" \
+  --resume-bullet "Built resume-ready and portfolio-ready Markdown generation from stored contribution data"
 ```
 
-### 3. Update Commit Details
+Generate resume-style Markdown:
 
 ```bash
-# From within your git repository
-contrack update
-
-# Or specify a path
-contrack update --repo-path /path/to/repo
+contrack generate markdown --style resume --output CONTRIBUTIONS.md
 ```
 
-### 4. Generate Markdown Documentation
+Generate portfolio-style Markdown to stdout:
 
 ```bash
-contrack generate \
-  --repo-url "https://github.com/org/repo" \
-  --output CONTRIBUTIONS.md
-
-# Filter by author
-contrack generate \
-  --repo-url "https://github.com/org/repo" \
-  --output CONTRIBUTIONS.md \
-  --author "John Doe"
+contrack generate markdown --style portfolio
 ```
 
 ## Commands
 
-### `init`
-Initialize a new repository in the database.
+### Workspace
 
 ```bash
-contrack init --repo-url <URL> --org <ORG> --name <NAME> [--description <DESC>]
+contrack init
+contrack locations
+contrack stats [repo]
 ```
 
-### `add`
-Add a new contribution.
+### Repositories
 
 ```bash
-contrack add \
-  --repo-url <URL> \
-  --name <NAME> \
-  --overview <OVERVIEW> \
-  --description <DESC> \
-  --key-commits <COMMA_SEPARATED_HASHES> \
-  [--related-commits <COMMA_SEPARATED_HASHES>] \
-  [--category <CATEGORY>] \
-  [--priority <1-10>]
+contrack repo add [path] [--name <display-name>] [--slug <slug>]
+contrack repo list
+contrack repo remove <repo>
 ```
 
-### `update`
-Extract commit details from git repository and update the database.
+Repository selectors accept a slug, name, local path, or remote URL.
+
+### Contributions
 
 ```bash
-contrack update [--repo-path <PATH>]
+contrack contribution add --name <name> --overview <text> --description <text> --key-commit <hash>...
+contrack contribution edit <id-or-name> [--name <name>] [--overview <text>] [--description <text>]
+contrack contribution list [--repo <repo>]
+contrack contribution show <id-or-name>
 ```
 
-### `generate`
-Generate contributions markdown file.
+Useful contribution flags:
 
 ```bash
-contrack generate \
-  --repo-url <URL> \
-  [--output <FILE>] \
-  [--author <AUTHOR>]
+--category <category>
+--priority <1-5>
+--key-commit <hash>
+--related-commit <hash>
+--technical-detail <text>
+--resume-bullet <text>
 ```
 
-### `query`
-Query the database.
+`edit` replaces any repeated list field you pass and supports explicit clear flags:
 
 ```bash
-# List contributions
-contrack query contributions <URL>
-
-# Show contribution details
-contrack query contribution <URL> <NAME>
-
-# Show commits for a contribution
-contrack query commits <URL> <NAME>
-
-# Show statistics
-contrack query stats
+--clear-key-commits
+--clear-related-commits
+--clear-technical-details
+--clear-resume-bullets
 ```
 
-### `list`
-List repositories in the database.
+### Commits
 
 ```bash
-contrack list [--detailed]
+contrack commit import [repo] [--all]
+contrack refresh [repo] [--all]
+contrack commit list [--repo <repo>] [--contribution <id-or-name>] [--limit <n>]
 ```
 
-## Database Location
+`refresh` is the daily “pull the latest evidence into Contrack” command. `update` is available as an alias.
 
-The SQLite database is stored in platform-specific application data directories:
-
-- **macOS**: `~/Library/Application Support/com.contrack.contrack/contributions.db`
-- **Linux**: `~/.local/share/contrack/contributions.db`
-- **Windows**: `%APPDATA%\contrack\contributions.db`
-
-## Usage with AI Agents
-
-Contrack is designed to work seamlessly with AI agents. The database includes:
-
-- **Agent Rules** - Instructions for AI agents on how to use the database
-- **Prompts** - Reusable prompt templates for common tasks
-- **Structured Data** - Consistent schema for easy querying
-
-### Example AI Workflow
-
-1. **Load the database**:
-   ```python
-   import sqlite3
-   conn = sqlite3.connect('path/to/contributions.db')
-   ```
-
-2. **Read agent rules**:
-   ```sql
-   SELECT * FROM agent_rules ORDER BY priority DESC;
-   ```
-
-3. **Query contributions**:
-   ```sql
-   SELECT * FROM contributions 
-   WHERE repository_url = 'https://github.com/org/repo'
-   ORDER BY priority DESC;
-   ```
-
-4. **Generate markdown** using the `generate_contributions_markdown` prompt
-
-## Categories
-
-Standard contribution categories:
-
-- **Core Feature** - Major features central to the product
-- **Integration** - Third-party service integrations
-- **Infrastructure** - Backend infrastructure and tooling
-- **Feature Enhancement** - Improvements to existing features
-- **Feature** - New features (less critical than Core Feature)
-- **Configuration** - Configuration changes and state management
-- **Performance** - Performance optimizations
-- **Bug Fix** - Bug fixes and corrections
-
-## Priority Levels
-
-- **10** - Critical/core features, major architectural changes
-- **9-8** - Major features, important integrations
-- **7-5** - Important features and enhancements
-- **4-1** - Minor features, bug fixes, configuration changes
-
-## Examples
-
-### Complete Workflow
+### Markdown Generation
 
 ```bash
-# 1. Initialize repository
-contrack init \
-  --repo-url "https://github.com/myorg/myrepo" \
-  --org "MyOrg" \
-  --name "myrepo"
-
-# 2. Add contributions
-contrack add \
-  --repo-url "https://github.com/myorg/myrepo" \
-  --name "API Authentication" \
-  --overview "Implemented JWT-based authentication" \
-  --description "Full JWT implementation with refresh tokens..." \
-  --key-commits "a1b2c3d,e4f5g6h" \
-  --category "Core Feature" \
-  --priority 10
-
-# 3. Update commit details from git
-cd /path/to/myrepo
-contrack update
-
-# 4. Generate documentation
-contrack generate \
-  --repo-url "https://github.com/myorg/myrepo" \
-  --output CONTRIBUTIONS.md
+contrack generate markdown [--repo <repo>] [--style resume|portfolio] [--output <file>]
 ```
 
-### Query Examples
+## Data Model
+
+Each contribution stores:
+
+1. `name`
+2. `overview`
+3. `description`
+4. `category`
+5. `priority`
+6. `key commits`
+7. `related commits`
+8. `technical details` (optional)
+9. `resume bullets` (optional)
+
+Commits are imported from git with:
+
+1. hash
+2. author
+3. date
+4. message summary
+5. files changed
+6. lines added and deleted
+
+Commit hashes in contributions are matched against imported commits by exact hash or unique prefix.
+
+## Database Locations
+
+Contrack prefers a project-local database when you run `contrack init`:
+
+- Project-local: `<repo>/.contrack/contrack.db`
+- Global fallback:
+  - Linux: `~/.local/share/contrack/contrack.db`
+  - macOS: `~/Library/Application Support/com.contrack.contrack/contrack.db`
+  - Windows: `%APPDATA%\contrack\contrack.db`
+
+Run `contrack locations` to see the active path on your machine.
+
+## Example Workflow
 
 ```bash
-# List all contributions
-contrack query contributions "https://github.com/myorg/myrepo"
+# 1. Initialize a local workspace inside the repository you care about.
+contrack init
 
-# Get details for a specific contribution
-contrack query contribution "https://github.com/myorg/myrepo" "API Authentication"
+# 2. Track the repository.
+contrack repo add .
 
-# View commits for a contribution
-contrack query commits "https://github.com/myorg/myrepo" "API Authentication"
+# 3. Import commit evidence.
+contrack refresh
 
-# Database statistics
-contrack query stats
+# 4. Capture the contribution in structured form.
+contrack contribution add \
+  --name "Markdown generator" \
+  --overview "Built high-signal contribution exports for career materials." \
+  --description "Added grouped markdown output sorted by contribution priority so the same data can support both resume and portfolio writing." \
+  --category "Feature" \
+  --priority 4 \
+  --key-commit 1a2b3c4d \
+  --technical-detail "Resume and portfolio styles share one evidence model" \
+  --resume-bullet "Created reusable markdown output from tracked engineering contributions"
+
+# 5. Inspect what you have.
+contrack contribution list
+contrack contribution show 1
+contrack commit list --contribution 1
+
+# 6. Generate polished markdown.
+contrack generate markdown --style portfolio --output PORTFOLIO_CONTRIBUTIONS.md
 ```
 
 ## Development
 
-### Building
+Run the standard verification steps:
 
 ```bash
+cargo build
 cargo build --release
-```
-
-### Running Tests
-
-```bash
+cargo clippy --all-targets --all-features -- -D warnings
 cargo test
 ```
-
-### Running Lints
-
-```bash
-cargo clippy
-```
-
-## Contributing
-
-Contributions are welcome! Please feel free to submit a Pull Request.
-
-## License
-
-Licensed under either of:
-
-- Apache License, Version 2.0 ([LICENSE-APACHE](LICENSE-APACHE) or http://www.apache.org/licenses/LICENSE-2.0)
-- MIT license ([LICENSE-MIT](LICENSE-MIT) or http://opensource.org/licenses/MIT)
-
-at your option.
-
-## Acknowledgments
-
-Built with ❤️ for developers and AI agents who want to maintain great contribution documentation.
-

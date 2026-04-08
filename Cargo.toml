@@ -7,7 +7,7 @@ description = "A CLI tool for tracking and documenting code contributions across
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/isaacadams/contrack"
 readme = "README.md"
-keywords = ["cli", "git", "contributions", "documentation", "tracking", "ai", "markdown"]
+keywords = ["cli", "git", "contributions", "documentation", "markdown"]
 categories = ["command-line-utilities", "development-tools", "utilities"]
 
 [[bin]]
@@ -16,15 +16,13 @@ path = "src/main.rs"
 
 [dependencies]
 clap = { version = "4.4", features = ["derive"] }
-rusqlite = { version = "0.30", features = ["bundled"] }
+rusqlite = { version = "0", features = ["bundled"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
-directories = "5.0"
+directories = "6"
 anyhow = "1.0"
 chrono = "0.4"
 git2 = { version = "0.18", features = ["vendored-libgit2", "vendored-openssl"] }
-colored = "2.0"
-toml = "0.8"
 
 [dev-dependencies]
 tempfile = "3.8"
