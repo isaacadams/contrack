@@ -94,6 +94,40 @@ If unit tests fail after your changes:
 - Handle errors appropriately using `Result` types
 - Use `anyhow` for error handling consistency
 
+## AI-Assisted Contribution Identification
+
+When using Contrack itself to identify contributions for a specific developer, follow this workflow:
+
+1. Use `contrack` as the system of record.
+   - Refresh stored evidence with `contrack refresh` or `contrack commit import`
+   - Inspect imported evidence with `contrack commit list`
+   - Save accepted contribution records with `contrack contribution add`
+
+2. Use `gh` to fetch higher-signal GitHub context.
+   - Prefer PR titles, descriptions, authorship, changed files, and commit lists over raw commit messages alone
+   - Useful commands include:
+     - `gh pr list --author <user> --state all`
+     - `gh pr view <number> --json title,body,author,files,commits`
+     - `gh search prs --author <user> --repo <owner/repo>`
+
+3. Identify larger contributions, not raw commit logs.
+   - Group related commits into one contribution when they clearly serve one outcome
+   - Prefer features, major refactors, infrastructure work, reliability work, performance work, and meaningful tooling improvements
+   - Avoid creating one contribution per commit unless a single commit fully represents a meaningful standalone accomplishment
+
+4. Group commits using strong evidence.
+   - Group by shared PR, feature, issue, subsystem, or tightly related time window
+   - Split when one PR contains multiple distinct outcomes or when the work is clearly unrelated
+
+5. Attribute carefully to a specific user.
+   - Start with commit author evidence
+   - Validate with PR authorship and PR context from `gh`
+   - If authorship is mixed or unclear, keep only the clearly attributable portion or mark the grouping as uncertain
+
+6. Be conservative.
+   - Fewer, stronger contributions are better than many weak ones
+   - Down-rank or ignore formatting-only changes, dependency churn without clear impact, isolated housekeeping, and noisy WIP commits unless they are part of a larger finished outcome
+
 ## Summary Checklist
 
 Before marking work as complete, verify:

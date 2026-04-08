@@ -216,6 +216,46 @@ contrack commit list --contribution 1
 contrack generate markdown --style portfolio --output PORTFOLIO_CONTRIBUTIONS.md
 ```
 
+## AI-Assisted Contribution Identification
+
+Contrack works best when AI helps curate contributions for a specific developer from commit and pull request evidence.
+
+Use this division of labor:
+
+1. `contrack` is the system of record for imported commit evidence and saved contributions.
+2. `gh` is the context fetcher for pull request titles, descriptions, authorship, files, and linked metadata.
+3. The AI should group related commits into larger contributions, not create one contribution per commit.
+
+Recommended workflow for one target user:
+
+```bash
+# 1. Refresh imported commit evidence.
+contrack refresh --repo <repo>
+
+# 2. Inspect stored commits for the repository.
+contrack commit list --repo <repo> --limit 100
+
+# 3. Fetch pull request context for the target user.
+gh pr list --author <github-user> --state all
+gh pr view <number> --json title,body,author,files,commits
+
+# 4. Save curated contribution records with contrack.
+contrack contribution add ...
+
+# 5. Generate final markdown.
+contrack generate markdown --repo <repo> --style resume
+```
+
+When using AI, instruct it to:
+
+1. Identify contributions made by one specific user.
+2. Group related commits into larger projects, features, refactors, fixes, or infrastructure efforts.
+3. Use `gh` when commit messages alone are too noisy.
+4. Save accepted contributions with `contrack contribution add`.
+5. Prefer fewer, stronger contributions over many weak ones.
+
+Detailed guidance and prompt templates live in `docs/ai-workflow.md`.
+
 ## Development
 
 Run the standard verification steps:
