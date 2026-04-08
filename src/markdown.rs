@@ -1,10 +1,12 @@
 use std::collections::BTreeMap;
 
+use serde::Serialize;
+
 use crate::database::{Contribution, StoredCommit, TrackedRepository};
 use crate::utils::{join_lines, shorten_hash};
 use crate::MarkdownStyle;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct ContributionEvidence {
     pub contribution: Contribution,
     pub key_commits: Vec<StoredCommit>,
@@ -70,6 +72,15 @@ pub fn render_markdown(
 fn render_resume_entry(output: &mut String, item: &ContributionEvidence) {
     output.push_str(&format!("### {}\n\n", item.contribution.name));
     output.push_str(&format!("{}\n\n", item.contribution.overview));
+    output.push_str(&format!(
+        "Status: `{}`{}\n\n",
+        item.contribution.status,
+        item.contribution
+            .confidence
+            .as_ref()
+            .map(|value| format!(" | Confidence: `{value}`"))
+            .unwrap_or_default()
+    ));
 
     if !item.contribution.resume_bullets.is_empty() {
         output.push_str(&join_lines(&item.contribution.resume_bullets));
@@ -87,13 +98,44 @@ fn render_resume_entry(output: &mut String, item: &ContributionEvidence) {
             .join(", ");
         output.push_str(&format!("Evidence: {}\n\n", hashes));
     }
+
+    if !item.contribution.covered_prs.is_empty() {
+        let prs = item
+            .contribution
+            .covered_prs
+            .iter()
+            .map(|number| format!("#{}", number))
+            .collect::<Vec<_>>()
+            .join(", ");
+        output.push_str(&format!("Covered PRs: {}\n\n", prs));
+    }
 }
 
 fn render_portfolio_entry(output: &mut String, item: &ContributionEvidence) {
     output.push_str(&format!("### {}\n\n", item.contribution.name));
     output.push_str(&format!("**Priority:** {}\n\n", item.contribution.priority));
+    output.push_str(&format!("**Status:** {}\n\n", item.contribution.status));
+    if let Some(confidence) = &item.contribution.confidence {
+        output.push_str(&format!("**Confidence:** {}\n\n", confidence));
+    }
     output.push_str(&format!("{}\n\n", item.contribution.overview));
     output.push_str(&format!("{}\n\n", item.contribution.description));
+
+    if let Some(rationale) = &item.contribution.rationale {
+        output.push_str("#### Rationale\n\n");
+        output.push_str(&format!("{}\n\n", rationale));
+    }
+
+    if !item.contribution.covered_prs.is_empty() {
+        let prs = item
+            .contribution
+            .covered_prs
+            .iter()
+            .map(|number| format!("#{}", number))
+            .collect::<Vec<_>>()
+            .join(", ");
+        output.push_str(&format!("**Covered PRs:** {}\n\n", prs));
+    }
 
     if !item.contribution.technical_details.is_empty() {
         output.push_str("#### Technical Details\n\n");
@@ -188,6 +230,10 @@ mod tests {
             description: format!("Description for {name}"),
             category: category.to_string(),
             priority,
+            status: "draft".to_string(),
+            confidence: Some("high".to_string()),
+            rationale: Some("Clear feature grouping".to_string()),
+            covered_prs: vec![123],
             key_commit_refs: vec!["abc123".to_string()],
             related_commit_refs: Vec::new(),
             technical_details: vec!["Rust CLI".to_string()],
@@ -198,9 +244,13 @@ mod tests {
     fn commit(summary: &str) -> StoredCommit {
         StoredCommit {
             hash: "abc123456789".to_string(),
+            repository_id: 1,
+            repository_slug: "contrack".to_string(),
             author_name: "Isaac".to_string(),
+            author_email: Some("isaac@example.com".to_string()),
             committed_at: "now".to_string(),
             summary: summary.to_string(),
+            body: None,
             files_changed: vec!["src/main.rs".to_string()],
             lines_added: 10,
             lines_deleted: 2,

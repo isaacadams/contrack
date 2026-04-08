@@ -1,11 +1,13 @@
 use anyhow::{anyhow, Context, Result};
+use serde::Serialize;
+use serde_json::json;
 use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 
 use crate::database::{
-    Contribution, Database, DatabaseStats, NewContribution, NewRepository, StoredCommit,
-    TrackedRepository,
+    CommitAuthorSummary, Contribution, Database, DatabaseStats, NewContribution, NewRepository,
+    RepositoryStatus, StoredCommit, TrackedRepository,
 };
 use crate::git;
 use crate::markdown::{self, ContributionEvidence};
@@ -58,9 +60,13 @@ pub fn repo_add_command(
     Ok(())
 }
 
-pub fn repo_list_command() -> Result<()> {
+pub fn repo_list_command(json_output: bool) -> Result<()> {
     let db = Database::open()?;
     let repositories = db.list_repositories()?;
+
+    if json_output {
+        return print_json(&repositories);
+    }
 
     if repositories.is_empty() {
         println!("No tracked repositories yet.");
@@ -79,6 +85,45 @@ pub fn repo_list_command() -> Result<()> {
     Ok(())
 }
 
+pub fn repo_status_command(repo_selector: Option<String>, json_output: bool) -> Result<()> {
+    let db = Database::open()?;
+    let repository_id = match repo_selector.as_deref() {
+        Some(_) => Some(resolve_repository(&db, repo_selector.as_deref())?.id),
+        None => None,
+    };
+    let current_repository_id = infer_repository_from_context(&db).ok().map(|repo| repo.id);
+    let statuses = db.list_repository_statuses(repository_id)?;
+
+    if json_output {
+        let payload = statuses
+            .into_iter()
+            .map(|status| {
+                json!({
+                    "repository": status.repository,
+                    "contributions": status.contributions,
+                    "commits": status.commits,
+                    "latest_commit_at": status.latest_commit_at,
+                    "latest_imported_at": status.latest_imported_at,
+                    "current_context": current_repository_id == Some(status.repository.id),
+                })
+            })
+            .collect::<Vec<_>>();
+        return print_json(&payload);
+    }
+
+    if statuses.is_empty() {
+        println!("No tracked repositories yet.");
+        println!("Start with: contrack repo add .");
+        return Ok(());
+    }
+
+    for status in statuses {
+        print_repository_status(&status, current_repository_id == Some(status.repository.id));
+    }
+
+    Ok(())
+}
+
 pub fn repo_remove_command(selector: String) -> Result<()> {
     let db = Database::open()?;
     let repository = db
@@ -87,7 +132,7 @@ pub fn repo_remove_command(selector: String) -> Result<()> {
     db.remove_repository(repository.id)?;
 
     println!(
-        "Removed repository `{}` and its stored contributions and commits.",
+        "Removed repository `{}` and its stored contributions, commits, and PR evidence.",
         repository.slug
     );
     Ok(())
@@ -103,10 +148,16 @@ pub fn contribution_add_command(
     priority: u8,
     key_commits: Vec<String>,
     related_commits: Vec<String>,
+    covered_prs: Vec<i64>,
     technical_details: Vec<String>,
     resume_bullets: Vec<String>,
+    rationale: Option<String>,
+    confidence: Option<String>,
+    status: String,
 ) -> Result<()> {
     validate_priority(priority)?;
+    validate_status(&status)?;
+    validate_confidence(confidence.as_deref())?;
     let db = Database::open()?;
     let repository = resolve_repository(&db, repo_selector.as_deref())?;
 
@@ -117,6 +168,10 @@ pub fn contribution_add_command(
         description,
         category,
         priority,
+        status,
+        confidence,
+        rationale: sanitize_optional_line(rationale),
+        covered_prs: sanitize_prs(covered_prs),
         key_commit_refs: sanitize_refs(key_commits),
         related_commit_refs: sanitize_refs(related_commits),
         technical_details: sanitize_lines(technical_details),
@@ -141,12 +196,19 @@ pub fn contribution_edit_command(
     priority: Option<u8>,
     key_commits: Option<Vec<String>>,
     related_commits: Option<Vec<String>>,
+    covered_prs: Option<Vec<i64>>,
     technical_details: Option<Vec<String>>,
     resume_bullets: Option<Vec<String>>,
+    rationale: Option<String>,
+    confidence: Option<String>,
+    status: Option<String>,
     clear_key_commits: bool,
     clear_related_commits: bool,
+    clear_covered_prs: bool,
     clear_technical_details: bool,
     clear_resume_bullets: bool,
+    clear_rationale: bool,
+    clear_confidence: bool,
 ) -> Result<()> {
     let db = Database::open()?;
     let mut contribution = db
@@ -168,6 +230,26 @@ pub fn contribution_edit_command(
     }
     if let Some(category) = category {
         contribution.category = category;
+    }
+    if let Some(status) = status {
+        validate_status(&status)?;
+        contribution.status = status;
+    }
+    if clear_confidence {
+        contribution.confidence = None;
+    } else if let Some(confidence) = confidence {
+        validate_confidence(Some(&confidence))?;
+        contribution.confidence = Some(confidence);
+    }
+    if clear_rationale {
+        contribution.rationale = None;
+    } else if let Some(rationale) = rationale {
+        contribution.rationale = sanitize_optional_line(Some(rationale));
+    }
+    if clear_covered_prs {
+        contribution.covered_prs.clear();
+    } else if let Some(covered_prs) = covered_prs {
+        contribution.covered_prs = sanitize_prs(covered_prs);
     }
     if clear_key_commits {
         contribution.key_commit_refs.clear();
@@ -198,16 +280,18 @@ pub fn contribution_edit_command(
     Ok(())
 }
 
-pub fn contribution_list_command(repo_selector: Option<String>) -> Result<()> {
+pub fn contribution_list_command(repo_selector: Option<String>, json_output: bool) -> Result<()> {
     let db = Database::open()?;
     let repository_id = match repo_selector.as_deref() {
-        Some(_) | None if should_infer_repo(&db, repo_selector.as_deref())? => {
-            Some(resolve_repository(&db, repo_selector.as_deref())?.id)
-        }
-        _ => None,
+        Some(_) => Some(resolve_repository(&db, repo_selector.as_deref())?.id),
+        None => None,
     };
 
-    let contributions = db.list_contributions(repository_id)?;
+    let contributions = db.list_contributions(repository_id, None)?;
+    if json_output {
+        return print_json(&contributions);
+    }
+
     if contributions.is_empty() {
         println!("No contributions found.");
         return Ok(());
@@ -215,8 +299,19 @@ pub fn contribution_list_command(repo_selector: Option<String>) -> Result<()> {
 
     for contribution in contributions {
         println!(
-            "{}  [{}] p{}  {}",
-            contribution.id, contribution.repository_slug, contribution.priority, contribution.name
+            "{}  [{}] p{} {} {}",
+            contribution.id,
+            contribution.repository_slug,
+            contribution.priority,
+            contribution.status,
+            contribution.name
+        );
+        println!(
+            "  confidence: {} | key commits: {} | related commits: {} | covered PRs: {}",
+            contribution.confidence.as_deref().unwrap_or("unset"),
+            contribution.key_commit_refs.len(),
+            contribution.related_commit_refs.len(),
+            contribution.covered_prs.len(),
         );
         println!("  {}", contribution.overview);
     }
@@ -224,7 +319,7 @@ pub fn contribution_list_command(repo_selector: Option<String>) -> Result<()> {
     Ok(())
 }
 
-pub fn contribution_show_command(selector: String) -> Result<()> {
+pub fn contribution_show_command(selector: String, json_output: bool) -> Result<()> {
     let db = Database::open()?;
     let contribution = db
         .get_contribution(&selector)?
@@ -232,10 +327,28 @@ pub fn contribution_show_command(selector: String) -> Result<()> {
     let commits = db.list_all_commits_for_repository(contribution.repository_id)?;
     let evidence = build_evidence(&contribution, &commits);
 
+    if json_output {
+        return print_json(&json!({
+            "contribution": contribution,
+            "evidence": evidence,
+        }));
+    }
+
     println!("{} ({})", contribution.name, contribution.id);
     println!("Repository: {}", contribution.repository_slug);
     println!("Category: {}", contribution.category);
     println!("Priority: {}", contribution.priority);
+    println!("Status: {}", contribution.status);
+    println!(
+        "Confidence: {}",
+        contribution.confidence.as_deref().unwrap_or("unset")
+    );
+    if !contribution.covered_prs.is_empty() {
+        println!("Covered PRs: {:?}", contribution.covered_prs);
+    }
+    if let Some(rationale) = &contribution.rationale {
+        println!("Rationale: {}", rationale);
+    }
     println!();
     println!("{}", contribution.overview);
     println!();
@@ -267,7 +380,81 @@ pub fn contribution_show_command(selector: String) -> Result<()> {
         &evidence.related_commits,
         &evidence.unresolved_related_refs,
     );
+    Ok(())
+}
 
+pub fn contribution_merge_command(
+    primary_selector: String,
+    secondary_selector: String,
+) -> Result<()> {
+    let db = Database::open()?;
+    let mut primary = db
+        .get_contribution(&primary_selector)?
+        .with_context(|| format!("No contribution matched '{primary_selector}'."))?;
+    let secondary = db
+        .get_contribution(&secondary_selector)?
+        .with_context(|| format!("No contribution matched '{secondary_selector}'."))?;
+
+    if primary.id == secondary.id {
+        return Err(anyhow!("Cannot merge a contribution into itself."));
+    }
+    if primary.repository_id != secondary.repository_id {
+        return Err(anyhow!(
+            "Can only merge contributions within the same repository."
+        ));
+    }
+
+    primary.priority = primary.priority.max(secondary.priority);
+    primary.status = merge_status(&primary.status, &secondary.status);
+    primary.confidence = merge_confidence(primary.confidence.clone(), secondary.confidence.clone());
+    primary.rationale = merge_optional_text(primary.rationale.clone(), secondary.rationale.clone());
+    primary.covered_prs = merge_numbers(&primary.covered_prs, &secondary.covered_prs);
+    primary.key_commit_refs = merge_strings(&primary.key_commit_refs, &secondary.key_commit_refs);
+    primary.related_commit_refs =
+        merge_strings(&primary.related_commit_refs, &secondary.related_commit_refs);
+    primary.technical_details =
+        merge_strings(&primary.technical_details, &secondary.technical_details);
+    primary.resume_bullets = merge_strings(&primary.resume_bullets, &secondary.resume_bullets);
+    primary.description = format!(
+        "{}\n\n{}",
+        primary.description.trim(),
+        secondary.description.trim()
+    );
+
+    db.update_contribution(&primary)?;
+    db.delete_contribution(secondary.id)?;
+
+    println!(
+        "Merged contribution {} into {} ({})",
+        secondary.id, primary.id, primary.name
+    );
+    Ok(())
+}
+
+pub fn contribution_link_pr_command(selector: String, prs: Vec<i64>, replace: bool) -> Result<()> {
+    let db = Database::open()?;
+    let mut contribution = db
+        .get_contribution(&selector)?
+        .with_context(|| format!("No contribution matched '{selector}'."))?;
+    let prs = sanitize_prs(prs);
+
+    if prs.is_empty() {
+        return Err(anyhow!("Pass at least one PR number to link."));
+    }
+
+    contribution.covered_prs = if replace {
+        prs
+    } else {
+        merge_numbers(&contribution.covered_prs, &prs)
+    };
+
+    db.update_contribution(&contribution)?;
+    println!(
+        "Linked {} PR(s) to contribution {} ({})",
+        contribution.covered_prs.len(),
+        contribution.id,
+        contribution.name
+    );
     Ok(())
 }
 
@@ -283,6 +470,7 @@ pub fn commit_list_command(
     repo_selector: Option<String>,
     contribution_selector: Option<String>,
     limit: usize,
+    json_output: bool,
 ) -> Result<()> {
     let db = Database::open()?;
 
@@ -295,6 +483,10 @@ pub fn commit_list_command(
         let mut matched = evidence.key_commits;
         matched.extend(evidence.related_commits);
         matched.truncate(limit);
+
+        if json_output {
+            return print_json(&matched);
+        }
 
         if matched.is_empty() {
             println!(
@@ -312,6 +504,10 @@ pub fn commit_list_command(
 
     let repository = resolve_repository(&db, repo_selector.as_deref())?;
     let commits = db.list_commits(Some(repository.id), limit)?;
+    if json_output {
+        return print_json(&commits);
+    }
+
     if commits.is_empty() {
         println!("No imported commits for repository `{}`.", repository.slug);
         return Ok(());
@@ -319,6 +515,43 @@ pub fn commit_list_command(
 
     for commit in commits {
         print_commit_line(&commit);
+    }
+    Ok(())
+}
+
+pub fn commit_authors_command(
+    repo_selector: Option<String>,
+    limit: usize,
+    json_output: bool,
+) -> Result<()> {
+    let db = Database::open()?;
+    let repository = match repo_selector.as_deref() {
+        Some(_) => Some(resolve_repository(&db, repo_selector.as_deref())?),
+        None => None,
+    };
+    let authors = db.list_commit_authors(repository.as_ref().map(|repo| repo.id), limit)?;
+
+    if json_output {
+        return print_json(&authors);
+    }
+
+    if authors.is_empty() {
+        if let Some(repository) = repository {
+            println!("No imported commits for repository `{}`.", repository.slug);
+        } else {
+            println!("No imported commits found.");
+        }
+        return Ok(());
+    }
+
+    if let Some(repository) = &repository {
+        println!("Authors for repository `{}`", repository.slug);
+    } else {
+        println!("Authors across tracked repositories");
+    }
+
+    for author in authors {
+        print_author_summary(&author);
     }
 
     Ok(())
@@ -328,14 +561,26 @@ pub fn generate_markdown_command(
     repo_selector: Option<String>,
     style: MarkdownStyle,
     output: Option<PathBuf>,
+    include: Option<String>,
+    status: Option<String>,
+    json_output: bool,
 ) -> Result<()> {
+    if let Some(status) = status.as_deref() {
+        validate_status(status)?;
+    }
+
     let db = Database::open()?;
     let repository = resolve_repository(&db, repo_selector.as_deref())?;
-    let contributions = db.list_contributions(Some(repository.id))?;
+    let include_ids = parse_include_ids(include.as_deref())?;
+    let mut contributions = db.list_contributions(Some(repository.id), status.as_deref())?;
+
+    if !include_ids.is_empty() {
+        contributions.retain(|contribution| include_ids.contains(&contribution.id));
+    }
 
     if contributions.is_empty() {
         return Err(anyhow!(
-            "No contributions found for repository `{}`. Add one with `contrack contribution add`.",
+            "No contributions found for repository `{}` after filtering.",
             repository.slug
         ));
     }
@@ -347,6 +592,14 @@ pub fn generate_markdown_command(
         .collect::<Vec<_>>();
     let rendered = markdown::render_markdown(&repository, &items, style);
 
+    if json_output {
+        return print_json(&json!({
+            "repository": repository,
+            "style": match style { MarkdownStyle::Resume => "resume", MarkdownStyle::Portfolio => "portfolio" },
+            "markdown": rendered,
+        }));
+    }
+
     if let Some(output) = output {
         fs::write(&output, rendered)
             .with_context(|| format!("Failed to write {}", output.display()))?;
@@ -354,11 +607,10 @@ pub fn generate_markdown_command(
     } else {
         print!("{}", rendered);
     }
-
     Ok(())
 }
 
-pub fn stats_command(repo_selector: Option<String>) -> Result<()> {
+pub fn stats_command(repo_selector: Option<String>, json_output: bool) -> Result<()> {
     let db = Database::open()?;
     let (label, stats) = if let Some(selector) = repo_selector {
         let repository = db
@@ -372,13 +624,26 @@ pub fn stats_command(repo_selector: Option<String>) -> Result<()> {
         ("All tracked data".to_string(), db.stats(None)?)
     };
 
+    if json_output {
+        return print_json(&json!({ "label": label, "stats": stats }));
+    }
+
     print_stats(&label, &stats);
     Ok(())
 }
 
-pub fn locations_command() -> Result<()> {
+pub fn locations_command(json_output: bool) -> Result<()> {
     let active_database = get_database_path()?;
     let global_database = get_global_database_path()?;
+    let project_workspace = get_contrack_dir().map(|path| path.display().to_string());
+
+    if json_output {
+        return print_json(&json!({
+            "active_database": active_database.display().to_string(),
+            "project_workspace": project_workspace,
+            "global_fallback": global_database.display().to_string(),
+        }));
+    }
 
     println!("Active database: {}", active_database.display());
     if let Some(workspace) = get_contrack_dir() {
@@ -407,7 +672,7 @@ fn refresh_inner(repo_selector: Option<String>, all: bool) -> Result<()> {
     for repository in repositories {
         let commits = git::extract_commits(Path::new(&repository.local_path))?;
         let count = db.import_commits(repository.id, &commits)?;
-        let contributions = db.list_contributions(Some(repository.id))?;
+        let contributions = db.list_contributions(Some(repository.id), None)?;
         let imported = db.list_all_commits_for_repository(repository.id)?;
         let matched_refs = contributions
             .iter()
@@ -428,24 +693,14 @@ fn resolve_repository(db: &Database, selector: Option<&str>) -> Result<TrackedRe
     if let Some(selector) = selector {
         return db
             .get_repository(selector)?
-            .with_context(|| format!("No tracked repository matched '{selector}'."));
+            .with_context(|| repository_not_found_message(selector));
     }
 
     infer_repository_from_context(db)
 }
 
-fn should_infer_repo(db: &Database, selector: Option<&str>) -> Result<bool> {
-    if selector.is_some() {
-        return Ok(true);
-    }
-
-    let repositories = db.list_repositories()?;
-    Ok(!repositories.is_empty())
-}
-
 fn infer_repository_from_context(db: &Database) -> Result<TrackedRepository> {
     let repositories = db.list_repositories()?;
-
     if repositories.is_empty() {
         return Err(anyhow!(
             "No tracked repositories. Start with `contrack repo add .`."
@@ -474,10 +729,11 @@ fn infer_repository_from_context(db: &Database) -> Result<TrackedRepository> {
                 return Ok(repository.clone());
             }
         }
-    }
 
-    if repositories.len() == 1 {
-        return Ok(repositories.into_iter().next().expect("single repository"));
+        return Err(anyhow!(
+            "Current directory is a git repository, but it is not tracked in Contrack. Add it with `contrack repo add \"{}\" --slug <slug>`.",
+            metadata.root_path.display()
+        ));
     }
 
     Err(anyhow!(
@@ -485,11 +741,32 @@ fn infer_repository_from_context(db: &Database) -> Result<TrackedRepository> {
     ))
 }
 
+fn repository_not_found_message(selector: &str) -> String {
+    format!(
+        "No tracked repository matched '{selector}'. Try `contrack repo add <path> --slug <slug>` first."
+    )
+}
+
 fn validate_priority(priority: u8) -> Result<()> {
     if (1..=5).contains(&priority) {
         Ok(())
     } else {
         Err(anyhow!("Priority must be between 1 and 5."))
+    }
+}
+
+fn validate_status(status: &str) -> Result<()> {
+    match status {
+        "draft" | "accepted" => Ok(()),
+        _ => Err(anyhow!("Status must be one of: draft, accepted.")),
+    }
+}
+
+fn validate_confidence(confidence: Option<&str>) -> Result<()> {
+    match confidence {
+        None => Ok(()),
+        Some("high" | "medium" | "low") => Ok(()),
+        Some(_) => Err(anyhow!("Confidence must be one of: high, medium, low.")),
     }
 }
 
@@ -503,12 +780,31 @@ fn sanitize_refs(values: Vec<String>) -> Vec<String> {
         .collect()
 }
 
+fn sanitize_prs(values: Vec<i64>) -> Vec<i64> {
+    let mut seen = HashSet::new();
+    values
+        .into_iter()
+        .filter(|value| seen.insert(*value))
+        .collect()
+}
+
 fn sanitize_lines(values: Vec<String>) -> Vec<String> {
     values
         .into_iter()
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty())
         .collect()
+}
+
+fn sanitize_optional_line(value: Option<String>) -> Option<String> {
+    value.and_then(|value| {
+        let trimmed = value.trim();
+        if trimmed.is_empty() {
+            None
+        } else {
+            Some(trimmed.to_string())
+        }
+    })
 }
 
 fn build_evidence(contribution: &Contribution, commits: &[StoredCommit]) -> ContributionEvidence {
@@ -563,6 +859,84 @@ fn resolve_commit_refs(
     (matched, unresolved)
 }
 
+fn parse_include_ids(raw: Option<&str>) -> Result<HashSet<i64>> {
+    let mut ids = HashSet::new();
+    let Some(raw) = raw else {
+        return Ok(ids);
+    };
+
+    for token in raw.split(',') {
+        let trimmed = token.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        ids.insert(
+            trimmed
+                .parse::<i64>()
+                .with_context(|| format!("Invalid contribution id '{trimmed}'."))?,
+        );
+    }
+    Ok(ids)
+}
+
+fn merge_status(primary: &str, secondary: &str) -> String {
+    if primary == "accepted" || secondary == "accepted" {
+        "accepted".to_string()
+    } else {
+        "draft".to_string()
+    }
+}
+
+fn merge_confidence(primary: Option<String>, secondary: Option<String>) -> Option<String> {
+    let rank = |value: &str| match value {
+        "high" => 3,
+        "medium" => 2,
+        "low" => 1,
+        _ => 0,
+    };
+
+    match (primary, secondary) {
+        (Some(left), Some(right)) => Some(if rank(&left) >= rank(&right) {
+            left
+        } else {
+            right
+        }),
+        (Some(left), None) => Some(left),
+        (None, Some(right)) => Some(right),
+        (None, None) => None,
+    }
+}
+
+fn merge_optional_text(primary: Option<String>, secondary: Option<String>) -> Option<String> {
+    match (primary, secondary) {
+        (Some(left), Some(right)) if left.trim() == right.trim() => Some(left),
+        (Some(left), Some(right)) => Some(format!("{}\n\n{}", left.trim(), right.trim())),
+        (Some(left), None) => Some(left),
+        (None, Some(right)) => Some(right),
+        (None, None) => None,
+    }
+}
+
+fn merge_strings(primary: &[String], secondary: &[String]) -> Vec<String> {
+    let mut seen = HashSet::new();
+    primary
+        .iter()
+        .chain(secondary.iter())
+        .filter(|value| seen.insert((*value).clone()))
+        .cloned()
+        .collect()
+}
+
+fn merge_numbers(primary: &[i64], secondary: &[i64]) -> Vec<i64> {
+    let mut seen = HashSet::new();
+    primary
+        .iter()
+        .chain(secondary.iter())
+        .filter(|value| seen.insert(**value))
+        .copied()
+        .collect()
+}
+
 fn print_commit_matches(title: &str, commits: &[StoredCommit], unresolved_refs: &[String]) {
     if commits.is_empty() && unresolved_refs.is_empty() {
         return;
@@ -570,7 +944,6 @@ fn print_commit_matches(title: &str, commits: &[StoredCommit], unresolved_refs: 
 
     println!();
     println!("{}:", title);
-
     for commit in commits {
         println!(
             "- {} {} by {} (+{}, -{}, {} files)",
@@ -582,7 +955,6 @@ fn print_commit_matches(title: &str, commits: &[StoredCommit], unresolved_refs: 
             commit.files_changed.len(),
         );
     }
-
     for unresolved in unresolved_refs {
         println!("- {} (not imported yet)", unresolved);
     }
@@ -596,7 +968,7 @@ fn print_commit_line(commit: &StoredCommit) {
         commit.author_name,
         commit.summary,
         commit.lines_added,
-        commit.lines_deleted
+        commit.lines_deleted,
     );
 }
 
@@ -605,4 +977,43 @@ fn print_stats(label: &str, stats: &DatabaseStats) {
     println!("Repositories: {}", stats.repositories);
     println!("Contributions: {}", stats.contributions);
     println!("Commits: {}", stats.commits);
+}
+
+fn print_repository_status(status: &RepositoryStatus, current_context: bool) {
+    let marker = if current_context { "  [current]" } else { "" };
+    println!(
+        "{}  {}{}",
+        status.repository.slug, status.repository.name, marker
+    );
+    println!("  path: {}", status.repository.local_path);
+    if let Some(remote_url) = &status.repository.remote_url {
+        println!("  remote: {}", remote_url);
+    }
+    println!(
+        "  contributions: {} | commits: {}",
+        status.contributions, status.commits
+    );
+    println!(
+        "  latest commit: {} | latest refresh: {}",
+        status.latest_commit_at.as_deref().unwrap_or("none"),
+        status.latest_imported_at.as_deref().unwrap_or("none")
+    );
+}
+
+fn print_author_summary(author: &CommitAuthorSummary) {
+    match &author.author_email {
+        Some(email) => println!(
+            "{} <{}>  commits: {}  latest: {}",
+            author.author_name, email, author.commit_count, author.latest_commit_at
+        ),
+        None => println!(
+            "{}  commits: {}  latest: {}",
+            author.author_name, author.commit_count, author.latest_commit_at
+        ),
+    }
+}
+
+fn print_json<T: Serialize>(value: &T) -> Result<()> {
+    println!("{}", serde_json::to_string_pretty(value)?);
+    Ok(())
 }
